@@ -44,6 +44,10 @@ packages/
 *.zip
 *.tar.gz
 *.7z
+*.mkv
+*.avi
+*.mp4
+*.mov
 
 # Documentation and examples (keep only essential files)
 **/docs/
