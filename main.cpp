@@ -3,7 +3,9 @@
 #include <chrono>
 #include <thread>
 #include <cmath>
+#include <cstdlib>
 #include <glad/glad.h>
+#define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -11,21 +13,23 @@
 
 using namespace std;
 
+// Water simulation parameters
 int width = 200;
 int height = 200;
 float dx = 1.0f;        // Grid spacing
-float dt = 0.7f;       // Time step (increased for more pronounced waves)
-float c = 1.0f;
-float damping = 0.01f;         // Wave speed
+float dt = 0.7f;        // Time step
+float c = 1.0f;         // Wave speed
+float damping = 0.01f;  // Damping factor
+float waterScale = 2.0f; // Scale factor for water surface size
 
+// Water height grids for simulation
 std::vector<std::vector<float>> height_current(width, std::vector<float>(height));
 std::vector<std::vector<float>> height_prev(width, std::vector<float>(height));
 std::vector<std::vector<float>> height_next(width, std::vector<float>(height));
 
-// Constants for ray tracing
+// Physical constants
 const float WATER_IOR = 1.33f;  // Index of refraction for water
 const float AIR_IOR = 1.0f;     // Index of refraction for air
-const int MAX_RAY_DEPTH = 5;    // Maximum number of ray bounces
 
 // OpenGL window dimensions
 const unsigned int SCR_WIDTH = 800;
@@ -118,11 +122,11 @@ const char* skyboxFragmentShaderSource = R"(
     
     out vec4 FragColor;
     
-    uniform samplerCube skybox;
-    
     void main() {
-        // Placeholder skybox colors for now
-        FragColor = vec4(TexCoords.x * 0.5 + 0.5, TexCoords.y * 0.5 + 0.5, TexCoords.z * 0.5 + 0.5, 1.0);
+        // Create a nice gradient sky from blue to light blue
+        float skyFactor = normalize(TexCoords).y * 0.5 + 0.5;
+        vec3 skyColor = mix(vec3(0.5, 0.8, 1.0), vec3(0.8, 0.9, 1.0), skyFactor);
+        FragColor = vec4(skyColor, 1.0);
     }
 )";
 
@@ -157,37 +161,37 @@ const char* causticsFragmentShaderSource = R"(
     uniform float bottomZ;
     uniform float waterIOR;
     uniform float airIOR;
+    uniform float time;
     
     void main() {
         vec3 norm = normalize(Normal);
         vec3 lightDir = normalize(lightPos - FragPos);
         
-        // Compute refraction
-        vec3 refr = refract(-lightDir, norm, airIOR/waterIOR);
-        if (refr == vec3(0.0)) {
-            FragColor = vec4(0.0); // Total internal reflection
-            return;
-        }
+        // Simple caustic calculation based on surface curvature
+        // Calculate the deviation of the normal from straight up
+        vec3 upVector = vec3(0.0, 0.0, 1.0);
+        float normalDeviation = length(norm - upVector);
         
-        // Compute intersection with bottom plane
-        float t = (bottomZ - FragPos.z) / refr.z;
-        if (t < 0.0) {
-            FragColor = vec4(0.0); // Ray goes up
-            return;
-        }
+        // Create caustic intensity based on how much the surface deviates from flat
+        float causticIntensity = normalDeviation * 4.0; // Amplify the effect
         
-        vec2 hitUV = FragPos.xy + refr.xy * t;
+        // Add some directional bias to avoid uniform distribution
+        float directionBias = dot(norm.xy, vec2(1.0, 1.0)) * 0.5 + 0.5;
+        causticIntensity *= directionBias;
         
-        // Calculate caustic intensity based on light convergence
-        float cosTheta = abs(dot(norm, lightDir));
-        float intensity = pow(1.0 - cosTheta, 4.0);  // Increased power for stronger caustics
+        // Add time-based variation for movement
+        float timeVar = sin(time * 1.5 + FragPos.x * 0.05 + FragPos.y * 0.05) * 0.4 + 0.6;
+        causticIntensity *= timeVar;
         
-        // Add some variation based on position
-        float variation = sin(hitUV.x * 0.1) * cos(hitUV.y * 0.1) * 0.5 + 0.5;
-        intensity *= variation;
+        // Create some pattern variation
+        float pattern = sin(FragPos.x * 0.1) * cos(FragPos.y * 0.1) * 0.3 + 0.7;
+        causticIntensity *= pattern;
         
-        // Output hit position and intensity
-        FragColor = vec4(hitUV, 0.0, intensity);
+        // Clamp intensity
+        causticIntensity = clamp(causticIntensity, 0.0, 1.0);
+        
+        // Output the caustic intensity
+        FragColor = vec4(0.0, 0.0, 0.0, causticIntensity);
     }
 )";
 
@@ -219,29 +223,40 @@ const char* bottomFragmentShaderSource = R"(
     out vec4 FragColor;
     
     uniform sampler2D causticsTexture;
+    uniform float time;
     
     void main() {
-        // Create a more visible grid pattern
-        float gridSize = 10.0;  // Grid size in world units
+        // Create a pool-style grid pattern
+        float gridSize = 12.0;
         vec2 grid = fract(FragPos.xy / gridSize);
-        float gridLine = step(0.95, grid.x) + step(0.95, grid.y);
+        float gridLine = smoothstep(0.85, 0.9, max(grid.x, grid.y));
         
-        // Pool-style colors
-        vec3 baseColor = vec3(0.0, 0.4, 0.8);  // Blue pool color
-        vec3 gridColor = vec3(1.0, 1.0, 1.0);  // White grid lines
+        // Pool colors
+        vec3 baseColor = vec3(0.1, 0.4, 0.7);  // Pool blue
+        vec3 gridColor = vec3(0.3, 0.6, 0.9);  // Lighter pool blue
         
-        // Mix base color with grid lines
-        vec3 finalColor = mix(baseColor, gridColor, gridLine);
+        // Mix base and grid colors
+        vec3 finalColor = mix(baseColor, gridColor, gridLine * 0.4);
         
-        // Sample caustics with increased intensity
-        vec2 uv = (FragPos.xy + vec2(100.0)) / 200.0;
-        float causticIntensity = texture(causticsTexture, uv).a * 2.0;  // Increased multiplier
+        // Sample caustics directly from the water surface position
+        vec2 causticsUV = (FragPos.xy + vec2(200.0)) / 400.0;
+        float causticIntensity = texture(causticsTexture, causticsUV).a;
         
-        // Add caustics with a warm highlight
-        finalColor += vec3(1.0, 0.9, 0.7) * causticIntensity;
+        // Add multiple caustic layers with slight offsets for complexity
+        vec2 offset1 = vec2(sin(time * 0.3) * 0.02, cos(time * 0.4) * 0.02);
+        vec2 offset2 = vec2(cos(time * 0.7) * 0.03, sin(time * 0.6) * 0.03);
         
-        // Ensure colors stay in valid range
-        finalColor = clamp(finalColor, 0.0, 1.0);
+        float caustic1 = texture(causticsTexture, causticsUV + offset1).a;
+        float caustic2 = texture(causticsTexture, causticsUV + offset2).a * 0.7;
+        
+        float totalCaustics = (causticIntensity + caustic1 + caustic2) * 2.5;
+        
+        // Apply caustics with bright, warm light
+        vec3 causticColor = vec3(1.5, 1.2, 0.9); // Bright warm light
+        finalColor += causticColor * totalCaustics;
+        
+        // Ensure proper color range
+        finalColor = clamp(finalColor, 0.0, 1.2);
         
         FragColor = vec4(finalColor, 1.0);
     }
@@ -299,51 +314,7 @@ const char* waterFragmentShaderSource = R"(
     }
 )";
 
-// Add debug shader sources
-const char* debugVertexShaderSource = R"(
-    #version 330 core
-    layout (location = 0) in vec3 aPos;
-    layout (location = 1) in vec2 aTexCoord;
-    
-    out vec2 TexCoord;
-    
-    void main() {
-        gl_Position = vec4(aPos, 1.0);
-        TexCoord = aTexCoord;
-    }
-)";
 
-const char* debugFragmentShaderSource = R"(
-    #version 330 core
-    in vec2 TexCoord;
-    out vec4 FragColor;
-    
-    uniform sampler2D debugTexture;
-    
-    void main() {
-        float intensity = texture(debugTexture, TexCoord).a;
-        // Show caustics in a subtle way
-        FragColor = vec4(1.0, 1.0, 1.0, intensity * 0.2);  // Reduced alpha to 0.2
-    }
-)";
-
-// Add debug quad vertices
-float debugQuadVertices[] = {
-    // positions   // texCoords
-    -1.0f,  1.0f,  0.0f, 1.0f,
-    -1.0f, -1.0f,  0.0f, 0.0f,
-     1.0f, -1.0f,  1.0f, 0.0f,
-     1.0f,  1.0f,  1.0f, 1.0f
-};
-
-unsigned int debugQuadIndices[] = {
-    0, 1, 2,
-    2, 3, 0
-};
-
-// Add debug quad VAO/VBO/EBO
-unsigned int debugVAO, debugVBO, debugEBO;
-unsigned int debugShaderProgram;
 
 // Global variables
 GLFWwindow* window;
@@ -356,7 +327,7 @@ unsigned int skyboxShaderProgram;
 unsigned int causticsShaderProgram;
 unsigned int bottomShaderProgram;
 
-const float BOTTOM_Z = -20.0f; // Match the bottom surface Z coordinate
+const float BOTTOM_Z = -30.0f; // Bottom surface Z coordinate (deeper for larger scale)
 
 std::vector<float> waterVertices;
 std::vector<unsigned int> waterIndices;
@@ -426,9 +397,9 @@ glm::vec3 refract(const glm::vec3& I, const glm::vec3& N, float ior) {
     return I * eta + n * (eta * cosi - sqrt(k));
 }
 
-// Ray tracing function
+// Ray tracing function (unused - kept for reference)
 glm::vec3 traceRay(const Ray& ray, int depth = 0) {
-    if (depth > MAX_RAY_DEPTH) return glm::vec3(0,0,0);
+    if (depth > 5) return glm::vec3(0,0,0);
     float t = -ray.origin.z / ray.direction.z;
     if (t < 0) return glm::vec3(0,0,0);
     glm::vec3 hitPoint = ray.origin + ray.direction * t;
@@ -505,9 +476,9 @@ void generateWaterMesh() {
     // Generate vertices
     for (int i = 0; i < width; i++) {
         for (int j = 0; j < height; j++) {
-            // Position
-            waterVertices.push_back(i - width/2.0f);
-            waterVertices.push_back(j - height/2.0f);
+            // Position (scaled to fill more of the viewport)
+            waterVertices.push_back((i - width/2.0f) * waterScale);
+            waterVertices.push_back((j - height/2.0f) * waterScale);
             waterVertices.push_back(height_current[i][j]);
             
             // Compute normal using getSurfaceNormal
@@ -547,8 +518,8 @@ void generateWaterMesh() {
 // Generate bottom surface mesh
 void generateBottomMesh() {
     float bottom_y = BOTTOM_Z; // Use the constant for bottom Z coordinate
-    float half_width = width / 2.0f;
-    float half_height = height / 2.0f;
+    float half_width = (width / 2.0f) * waterScale;
+    float half_height = (height / 2.0f) * waterScale;
 
     // Vertices for a simple quad
     float bottomVertices[] = {
@@ -687,19 +658,9 @@ void setupCausticsFBO() {
         std::cerr << "FBO incomplete\n";
     }
     
-    // Test clear and debug quad
-    glClearColor(0.2f, 0.3f, 0.4f, 0.5f);  // Distinctive teal color
+    // Clear the caustics texture
+    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
     glClear(GL_COLOR_BUFFER_BIT);
-    
-    // Draw debug quad to verify FBO setup
-    glDisable(GL_DEPTH_TEST);
-    glUseProgram(debugShaderProgram);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, causticsTexture);
-    glUniform1i(glGetUniformLocation(debugShaderProgram, "debugTexture"), 0);
-    glBindVertexArray(debugVAO);
-    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
-    glEnable(GL_DEPTH_TEST);
     
     // Reset to default framebuffer
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -707,10 +668,15 @@ void setupCausticsFBO() {
 
 // Main render loop
 void renderLoop() {
-    glm::vec3 lightPos(0.0f, 0.0f, 50.0f);
+    glm::vec3 lightPos(0.0f, 0.0f, 100.0f);
     glm::vec3 lightColor(1.0f, 1.0f, 1.0f);
+    
+    auto startTime = std::chrono::high_resolution_clock::now();
 
     while (!glfwWindowShouldClose(window)) {
+        // Calculate time for animations
+        auto currentTime = std::chrono::high_resolution_clock::now();
+        float time = std::chrono::duration<float>(currentTime - startTime).count();
         processInput(window);
         
         // Update water simulation
@@ -723,53 +689,40 @@ void renderLoop() {
         glClearColor(0.2f, 0.2f, 0.2f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         
-        // Camera setup
-        glm::vec3 cameraPos(0.0f, 0.0f, 50.0f);
+        // Camera setup (positioned to view the larger water surface)
+        glm::vec3 cameraPos(0.0f, 0.0f, 80.0f);
         glm::mat4 view = glm::lookAt(cameraPos, glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
-        glm::mat4 projection = glm::perspective(glm::radians(45.0f), (float)SCR_WIDTH/SCR_HEIGHT, 0.1f, 200.0f);
+        glm::mat4 projection = glm::perspective(glm::radians(60.0f), (float)SCR_WIDTH/SCR_HEIGHT, 0.1f, 300.0f);
 
-        // 1. Render Skybox
-        glDepthMask(GL_FALSE);
-        glUseProgram(skyboxShaderProgram);
-        glm::mat4 skyboxView = glm::mat4(glm::mat3(view));
-        glUniformMatrix4fv(glGetUniformLocation(skyboxShaderProgram, "view"), 1, GL_FALSE, glm::value_ptr(skyboxView));
-        glUniformMatrix4fv(glGetUniformLocation(skyboxShaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
-        glBindVertexArray(skyboxVAO);
-        glDrawArrays(GL_TRIANGLES, 0, 36);
-        glDepthMask(GL_TRUE);
-
-        // 2. Render Caustics Pass
+        // 2. Generate Caustics Texture
         glBindFramebuffer(GL_FRAMEBUFFER, causticsFBO);
         glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
         glClear(GL_COLOR_BUFFER_BIT);
         
         glEnable(GL_BLEND);
-        glBlendFunc(GL_ONE, GL_ONE);
+        glBlendFunc(GL_ONE, GL_ONE); // Additive blending for caustics accumulation
+        glDisable(GL_DEPTH_TEST);    // Disable depth test for caustics pass
         
-        glm::mat4 orthoProj = glm::ortho(-100.0f, +100.0f, -100.0f, +100.0f, 0.1f, 200.0f);
-        glm::mat4 topDownView = glm::lookAt(
-            glm::vec3(0.0f, 0.0f, 100.0f),
-            glm::vec3(0.0f, 0.0f, 0.0f),
-            glm::vec3(0.0f, 1.0f, 0.0f)
-        );
-        
+        // Use the same projection as the main camera for consistency
         glUseProgram(causticsShaderProgram);
         glm::mat4 model = glm::mat4(1.0f);
         glUniformMatrix4fv(glGetUniformLocation(causticsShaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(model));
-        glUniformMatrix4fv(glGetUniformLocation(causticsShaderProgram, "view"), 1, GL_FALSE, glm::value_ptr(topDownView));
-        glUniformMatrix4fv(glGetUniformLocation(causticsShaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(orthoProj));
+        glUniformMatrix4fv(glGetUniformLocation(causticsShaderProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
+        glUniformMatrix4fv(glGetUniformLocation(causticsShaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
         glUniform3fv(glGetUniformLocation(causticsShaderProgram, "lightPos"), 1, glm::value_ptr(lightPos));
         glUniform1f(glGetUniformLocation(causticsShaderProgram, "bottomZ"), BOTTOM_Z);
         glUniform1f(glGetUniformLocation(causticsShaderProgram, "waterIOR"), WATER_IOR);
         glUniform1f(glGetUniformLocation(causticsShaderProgram, "airIOR"), AIR_IOR);
+        glUniform1f(glGetUniformLocation(causticsShaderProgram, "time"), time);
         
         glBindVertexArray(waterVAO);
         glDrawElements(GL_TRIANGLES, waterIndices.size(), GL_UNSIGNED_INT, 0);
         
         glDisable(GL_BLEND);
+        glEnable(GL_DEPTH_TEST); // Re-enable depth test
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-        // 3. Render Bottom Surface
+        // 3. Render Pool Bottom (with caustics)
         glEnable(GL_DEPTH_TEST);
         glUseProgram(bottomShaderProgram);
         glm::mat4 bottomModel = glm::mat4(1.0f);
@@ -780,11 +733,12 @@ void renderLoop() {
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, causticsTexture);
         glUniform1i(glGetUniformLocation(bottomShaderProgram, "causticsTexture"), 0);
+        glUniform1f(glGetUniformLocation(bottomShaderProgram, "time"), time);
         
         glBindVertexArray(bottomVAO);
         glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
 
-        // 4. Render Water Surface
+        // 4. Render Water Surface (transparent)
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         
@@ -800,25 +754,15 @@ void renderLoop() {
         
         glDisable(GL_BLEND);
 
-        // 5. Debug: Draw caustics texture in a small corner
-        glDisable(GL_DEPTH_TEST);
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        
-        glUseProgram(debugShaderProgram);
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, causticsTexture);
-        glUniform1i(glGetUniformLocation(debugShaderProgram, "debugTexture"), 0);
-        
-        // Set viewport for debug quad (small corner)
-        glViewport(SCR_WIDTH - 200, 0, 200, 200);
-        glBindVertexArray(debugVAO);
-        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
-        
-        // Reset viewport
-        glViewport(0, 0, SCR_WIDTH, SCR_HEIGHT);
-        glDisable(GL_BLEND);
-        glEnable(GL_DEPTH_TEST);
+        // 5. Render Skybox (background)
+        glDepthMask(GL_FALSE);
+        glUseProgram(skyboxShaderProgram);
+        glm::mat4 skyboxView = glm::mat4(glm::mat3(view));
+        glUniformMatrix4fv(glGetUniformLocation(skyboxShaderProgram, "view"), 1, GL_FALSE, glm::value_ptr(skyboxView));
+        glUniformMatrix4fv(glGetUniformLocation(skyboxShaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
+        glBindVertexArray(skyboxVAO);
+        glDrawArrays(GL_TRIANGLES, 0, 36);
+        glDepthMask(GL_TRUE);
         
         glfwSwapBuffers(window);
         glfwPollEvents();
@@ -838,8 +782,9 @@ int main() {
     
     // Initialize water simulation
     init_grid();
-    add_disturbance(50, 50, 1.0f);
-    add_disturbance(52, 52, 1.0f);
+    add_disturbance(50, 50, 2.0f);
+    add_disturbance(150, 150, 1.5f);
+    add_disturbance(75, 125, 1.8f);
     
     // Generate and setup meshes
     generateWaterMesh();
@@ -854,26 +799,6 @@ int main() {
 
     // Setup caustics FBO
     setupCausticsFBO();
-    
-    // Add debug shader program
-    debugShaderProgram = createShaderProgram(debugVertexShaderSource, debugFragmentShaderSource);
-
-    // Setup debug quad
-    glGenVertexArrays(1, &debugVAO);
-    glGenBuffers(1, &debugVBO);
-    glGenBuffers(1, &debugEBO);
-
-    glBindVertexArray(debugVAO);
-    glBindBuffer(GL_ARRAY_BUFFER, debugVBO);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(debugQuadVertices), debugQuadVertices, GL_STATIC_DRAW);
-
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, debugEBO);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(debugQuadIndices), debugQuadIndices, GL_STATIC_DRAW);
-
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
     
     // Start render loop
     renderLoop();
@@ -891,7 +816,6 @@ int main() {
     glDeleteProgram(skyboxShaderProgram);
     glDeleteProgram(causticsShaderProgram);
     glDeleteProgram(bottomShaderProgram);
-    glDeleteProgram(debugShaderProgram);
     
     glfwTerminate();
     return 0;
@@ -914,20 +838,17 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
         double xpos, ypos;
         glfwGetCursorPos(window, &xpos, &ypos);
 
-        // Convert screen coordinates to world coordinates (simplified for flat plane)
-        // This conversion assumes a projection where z=0 is the water plane
-        // and camera is looking down. More accurate projection needed for real 3D picking.
+        // Convert screen coordinates to world coordinates
         float normalizedX = (float)xpos / SCR_WIDTH;  // 0 to 1
         float normalizedY = 1.0f - (float)ypos / SCR_HEIGHT; // 0 to 1 (invert y for OpenGL)
 
-        // Map to grid coordinates (adjusting for center offset and grid dimensions)
+        // Map to grid coordinates 
         int gridX = static_cast<int>(normalizedX * width);
         int gridY = static_cast<int>(normalizedY * height);
 
         // Ensure coordinates are within bounds and add disturbance
         if (gridX >= 0 && gridX < width && gridY >= 0 && gridY < height) {
             add_disturbance(gridX, gridY, 5.0f); // Add a disturbance with a height of 5.0
-            std::cout << "Disturbance added at grid: (" << gridX << ", " << gridY << ")" << std::endl;
         }
     }
 }
