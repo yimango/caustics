@@ -1,0 +1,67 @@
+# Build directories
+build/
+bin/
+obj/
+
+# IDE and editor files
+.vscode/
+.vs/
+*.vcxproj*
+*.sln
+*.suo
+*.user
+*.swp
+*.tmp
+
+# Compiled executables
+*.exe
+*.out
+*.app
+
+# Object files
+*.o
+*.obj
+
+# Libraries
+*.lib
+*.a
+*.so
+*.dylib
+*.dll
+
+# CMake generated files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+
+# Package manager files
+vcpkg/
+packages/
+
+# Large binary files
+*.zip
+*.tar.gz
+*.7z
+
+# Documentation and examples (keep only essential files)
+**/docs/
+**/examples/
+**/bin/
+**/lib-*/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+
+# System files
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# Debug files
+*.pdb
+*.ilk 
