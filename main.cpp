@@ -497,7 +497,11 @@ void mouse_button_callback(GLFWwindow* win, int button, int action, int) {
     int row = sliderRowAt(viewX, viewY);
     if (row >= 0) {
         sliderDrag = row;
-        writeSliderAt(row, viewX);
+        float trackX = sliderTrackX();
+        float trackW = sliderTrackW();
+        if (viewX >= trackX && viewX <= trackX + trackW) {
+            writeSliderAt(row, viewX);
+        }
         return;
     }
 
@@ -959,6 +963,9 @@ int main(int argc, char** argv) {
             baseDisturbance.amplitude = (float)std::atof(argv[++i]);
             baseDisturbance.wavelength = (float)std::atof(argv[++i]);
             baseDisturbance.tempo = (float)std::atof(argv[++i]);
+            if (!(baseDisturbance.wavelength > 0.0f)) {
+                baseDisturbance.wavelength = 40.0f;
+            }
         } else if (std::strcmp(argv[i], "--drop") == 0 && i + 4 < argc) {
             dropGridX = std::atoi(argv[++i]);
             dropGridY = std::atoi(argv[++i]);
