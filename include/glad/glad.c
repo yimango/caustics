@@ -52,12 +52,14 @@ PFNGLDELETEPROGRAMPROC glDeleteProgram = NULL;
 PFNGLGETUNIFORMLOCATIONPROC glGetUniformLocation = NULL;
 PFNGLUNIFORM1IPROC glUniform1i = NULL;
 PFNGLUNIFORM1FPROC glUniform1f = NULL;
+PFNGLUNIFORM2FVPROC glUniform2fv = NULL;
 PFNGLUNIFORM3FVPROC glUniform3fv = NULL;
 PFNGLUNIFORMMATRIX4FVPROC glUniformMatrix4fv = NULL;
 
 PFNGLGENTEXTURESPROC glGenTextures = NULL;
 PFNGLBINDTEXTUREPROC glBindTexture = NULL;
 PFNGLTEXIMAGE2DPROC glTexImage2D = NULL;
+PFNGLTEXSUBIMAGE2DPROC glTexSubImage2D = NULL;
 PFNGLTEXPARAMETERIPROC glTexParameteri = NULL;
 PFNGLACTIVETEXTUREPROC glActiveTexture = NULL;
 PFNGLDELETETEXTURESPROC glDeleteTextures = NULL;
@@ -124,12 +126,14 @@ int gladLoadGLLoader(GLADloadproc load) {
     glGetUniformLocation = (PFNGLGETUNIFORMLOCATIONPROC)get_proc(load, "glGetUniformLocation");
     glUniform1i = (PFNGLUNIFORM1IPROC)get_proc(load, "glUniform1i");
     glUniform1f = (PFNGLUNIFORM1FPROC)get_proc(load, "glUniform1f");
+    glUniform2fv = (PFNGLUNIFORM2FVPROC)get_proc(load, "glUniform2fv");
     glUniform3fv = (PFNGLUNIFORM3FVPROC)get_proc(load, "glUniform3fv");
     glUniformMatrix4fv = (PFNGLUNIFORMMATRIX4FVPROC)get_proc(load, "glUniformMatrix4fv");
 
     glGenTextures = (PFNGLGENTEXTURESPROC)get_proc(load, "glGenTextures");
     glBindTexture = (PFNGLBINDTEXTUREPROC)get_proc(load, "glBindTexture");
     glTexImage2D = (PFNGLTEXIMAGE2DPROC)get_proc(load, "glTexImage2D");
+    glTexSubImage2D = (PFNGLTEXSUBIMAGE2DPROC)get_proc(load, "glTexSubImage2D");
     glTexParameteri = (PFNGLTEXPARAMETERIPROC)get_proc(load, "glTexParameteri");
     glActiveTexture = (PFNGLACTIVETEXTUREPROC)get_proc(load, "glActiveTexture");
     glDeleteTextures = (PFNGLDELETETEXTURESPROC)get_proc(load, "glDeleteTextures");

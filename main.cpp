@@ -21,8 +21,20 @@
 #ifndef GL_PACK_ALIGNMENT
 #define GL_PACK_ALIGNMENT 0x0D05
 #endif
-#ifndef GL_GEOMETRY_SHADER
-#define GL_GEOMETRY_SHADER 0x8DD9
+#ifndef GL_RED
+#define GL_RED 0x1903
+#endif
+#ifndef GL_R32F
+#define GL_R32F 0x822E
+#endif
+#ifndef GL_TEXTURE_WRAP_S
+#define GL_TEXTURE_WRAP_S 0x2802
+#endif
+#ifndef GL_TEXTURE_WRAP_T
+#define GL_TEXTURE_WRAP_T 0x2803
+#endif
+#ifndef GL_CLAMP_TO_EDGE
+#define GL_CLAMP_TO_EDGE 0x812F
 #endif
 
 typedef void (APIENTRYP PFNGLREADPIXELSPROC)(GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, void*);
@@ -57,6 +69,7 @@ unsigned int waterVAO, waterVBO, waterEBO;
 unsigned int bottomVAO, bottomVBO, bottomEBO;
 unsigned int skyboxVAO, skyboxVBO;
 unsigned int causticsFBO, causticsTexture;
+unsigned int heightTexture;
 unsigned int waterShaderProgram;
 unsigned int skyboxShaderProgram;
 unsigned int causticsShaderProgram;
@@ -65,7 +78,6 @@ unsigned int bottomShaderProgram;
 int framebufferWidth = (int)SCR_WIDTH;
 int framebufferHeight = (int)SCR_HEIGHT;
 
-std::vector<float> waterVertices;
 std::vector<unsigned int> waterIndices;
 
 glm::mat4 beautyView(1.0f);
@@ -109,21 +121,24 @@ void init_grid() {
     height_next.assign(count, 0.0f);
 }
 
-glm::vec3 getSurfaceNormal(int x, int y) {
-    float ddx = (height_current[(x + 1) * height + y] - height_current[(x - 1) * height + y]) / (2.0f * dx) * meshHeightScale;
-    float ddy = (height_current[x * height + (y + 1)] - height_current[x * height + (y - 1)]) / (2.0f * dx) * meshHeightScale;
-    glm::vec3 n(-ddx, -ddy, 1.0f);
-    return glm::normalize(n);
-}
+void buildWaterMesh() {
+    std::vector<float> vertices(static_cast<size_t>(width) * static_cast<size_t>(height) * 3);
+    size_t v = 0;
+    for (int x = 0; x < width; ++x) {
+        for (int y = 0; y < height; ++y) {
+            vertices[v++] = (x - width / 2.0f) * waterScale;
+            vertices[v++] = (y - height / 2.0f) * waterScale;
+            vertices[v++] = 0.0f;
+        }
+    }
 
-void buildWaterIndices() {
     waterIndices.clear();
     waterIndices.reserve(static_cast<size_t>(width - 1) * static_cast<size_t>(height - 1) * 6);
     for (int x = 0; x < width - 1; ++x) {
         for (int y = 0; y < height - 1; ++y) {
-            unsigned int topLeft = x * height + y;
+            unsigned int topLeft = static_cast<unsigned int>(x * height + y);
             unsigned int topRight = topLeft + 1;
-            unsigned int bottomLeft = (x + 1) * height + y;
+            unsigned int bottomLeft = static_cast<unsigned int>((x + 1) * height + y);
             unsigned int bottomRight = bottomLeft + 1;
 
             waterIndices.push_back(topLeft);
@@ -135,29 +150,18 @@ void buildWaterIndices() {
             waterIndices.push_back(bottomRight);
         }
     }
-}
 
-void fillWaterVertices() {
-    waterVertices.resize(static_cast<size_t>(width) * static_cast<size_t>(height) * 6);
-    size_t v = 0;
-    for (int x = 0; x < width; ++x) {
-        for (int y = 0; y < height; ++y) {
-            waterVertices[v++] = (x - width / 2.0f) * waterScale;
-            waterVertices[v++] = (y - height / 2.0f) * waterScale;
-            waterVertices[v++] = height_current[x * height + y] * meshHeightScale;
+    glGenVertexArrays(1, &waterVAO);
+    glGenBuffers(1, &waterVBO);
+    glGenBuffers(1, &waterEBO);
 
-            glm::vec3 normal(0.0f, 0.0f, 1.0f);
-            if (x > 0 && x < width - 1 && y > 0 && y < height - 1) {
-                normal = getSurfaceNormal(x, y);
-            }
-            waterVertices[v++] = normal.x;
-            waterVertices[v++] = normal.y;
-            waterVertices[v++] = normal.z;
-        }
-    }
-
+    glBindVertexArray(waterVAO);
     glBindBuffer(GL_ARRAY_BUFFER, waterVBO);
-    glBufferSubData(GL_ARRAY_BUFFER, 0, waterVertices.size() * sizeof(float), waterVertices.data());
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(vertices.size() * sizeof(float)), vertices.data(), GL_STATIC_DRAW);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, waterEBO);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, static_cast<GLsizeiptr>(waterIndices.size() * sizeof(unsigned int)), waterIndices.data(), GL_STATIC_DRAW);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
 }
 
 void framebuffer_size_callback(GLFWwindow*, int fbW, int fbH) {
@@ -279,25 +283,6 @@ void generateBottomMesh() {
     glEnableVertexAttribArray(1);
 }
 
-void setupWaterBuffers() {
-    glGenVertexArrays(1, &waterVAO);
-    glGenBuffers(1, &waterVBO);
-    glGenBuffers(1, &waterEBO);
-
-    glBindVertexArray(waterVAO);
-
-    glBindBuffer(GL_ARRAY_BUFFER, waterVBO);
-    glBufferData(GL_ARRAY_BUFFER, static_cast<size_t>(width) * static_cast<size_t>(height) * 6 * sizeof(float), nullptr, GL_DYNAMIC_DRAW);
-
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, waterEBO);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, waterIndices.size() * sizeof(unsigned int), waterIndices.data(), GL_STATIC_DRAW);
-
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
-    glEnableVertexAttribArray(1);
-}
-
 void generateSkyboxMesh() {
     float skyboxVertices[] = {
         -1.0f,  1.0f, -1.0f,
@@ -361,6 +346,8 @@ void setupCausticsFBO() {
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, CAUSTICS_RES, CAUSTICS_RES, 0, GL_RGBA, GL_FLOAT, NULL);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, causticsTexture, 0);
 
@@ -375,6 +362,23 @@ void setupCausticsFBO() {
     glClear(GL_COLOR_BUFFER_BIT);
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+void setupHeightTexture() {
+    glGenTextures(1, &heightTexture);
+    glActiveTexture(GL_TEXTURE0 + 1);
+    glBindTexture(GL_TEXTURE_2D, heightTexture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, width, height, 0, GL_RED, GL_FLOAT, height_current.data());
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+}
+
+void uploadHeightTexture() {
+    glActiveTexture(GL_TEXTURE0 + 1);
+    glBindTexture(GL_TEXTURE_2D, heightTexture);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, GL_RED, GL_FLOAT, height_current.data());
 }
 
 void storeU16(unsigned char* dst, unsigned int value) {
@@ -438,7 +442,7 @@ bool captureWindowBmp(const char* path) {
     return (bool)out;
 }
 
-unsigned int createShaderProgram(const char* vertexSource, const char* fragmentSource, const char* geometrySource = nullptr) {
+unsigned int createShaderProgram(const char* vertexSource, const char* fragmentSource) {
     unsigned int vertexShader = glCreateShader(GL_VERTEX_SHADER);
     glShaderSource(vertexShader, 1, &vertexSource, NULL);
     glCompileShader(vertexShader);
@@ -461,24 +465,9 @@ unsigned int createShaderProgram(const char* vertexSource, const char* fragmentS
         std::cerr << "ERROR::SHADER::FRAGMENT::COMPILATION_FAILED\n" << infoLog << std::endl;
     }
 
-    unsigned int geometryShader = 0;
-    if (geometrySource != nullptr) {
-        geometryShader = glCreateShader(GL_GEOMETRY_SHADER);
-        glShaderSource(geometryShader, 1, &geometrySource, NULL);
-        glCompileShader(geometryShader);
-        glGetShaderiv(geometryShader, GL_COMPILE_STATUS, &success);
-        if (!success) {
-            glGetShaderInfoLog(geometryShader, 512, NULL, infoLog);
-            std::cerr << "ERROR::SHADER::GEOMETRY::COMPILATION_FAILED\n" << infoLog << std::endl;
-        }
-    }
-
     unsigned int shaderProgram = glCreateProgram();
     glAttachShader(shaderProgram, vertexShader);
     glAttachShader(shaderProgram, fragmentShader);
-    if (geometryShader != 0) {
-        glAttachShader(shaderProgram, geometryShader);
-    }
     glLinkProgram(shaderProgram);
 
     glGetProgramiv(shaderProgram, GL_LINK_STATUS, &success);
@@ -489,9 +478,6 @@ unsigned int createShaderProgram(const char* vertexSource, const char* fragmentS
 
     glDeleteShader(vertexShader);
     glDeleteShader(fragmentShader);
-    if (geometryShader != 0) {
-        glDeleteShader(geometryShader);
-    }
 
     return shaderProgram;
 }
@@ -506,7 +492,7 @@ int renderLoop() {
         processInput(window);
 
         update_wave();
-        fillWaterVertices();
+        uploadHeightTexture();
 
         glClearColor(0.45f, 0.65f, 0.85f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -537,6 +523,9 @@ int renderLoop() {
         glUniform1f(glGetUniformLocation(causticsShaderProgram, "airIOR"), AIR_IOR);
         glUniform1f(glGetUniformLocation(causticsShaderProgram, "heightScale"), meshHeightScale);
         glUniform1f(glGetUniformLocation(causticsShaderProgram, "poolExtent"), extent);
+        float gridSizeValue[2] = { (float)width, (float)height };
+        glUniform2fv(glGetUniformLocation(causticsShaderProgram, "gridSize"), 1, gridSizeValue);
+        glUniform1i(glGetUniformLocation(causticsShaderProgram, "heightTex"), 1);
 
         glBindVertexArray(waterVAO);
         glDrawElements(GL_TRIANGLES, (GLsizei)waterIndices.size(), GL_UNSIGNED_INT, 0);
@@ -574,6 +563,10 @@ int renderLoop() {
         glUniformMatrix4fv(glGetUniformLocation(waterShaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(beautyProjection));
         glUniform3fv(glGetUniformLocation(waterShaderProgram, "lightPos"), 1, glm::value_ptr(lightPos));
         glUniform3fv(glGetUniformLocation(waterShaderProgram, "viewPos"), 1, glm::value_ptr(cameraPos));
+        glUniform1f(glGetUniformLocation(waterShaderProgram, "heightScale"), meshHeightScale);
+        glUniform1f(glGetUniformLocation(waterShaderProgram, "poolExtent"), extent);
+        glUniform2fv(glGetUniformLocation(waterShaderProgram, "gridSize"), 1, gridSizeValue);
+        glUniform1i(glGetUniformLocation(waterShaderProgram, "heightTex"), 1);
         glBindVertexArray(waterVAO);
         glDrawElements(GL_TRIANGLES, (GLsizei)waterIndices.size(), GL_UNSIGNED_INT, 0);
         glDisable(GL_BLEND);
@@ -613,21 +606,21 @@ int main(int argc, char** argv) {
 
     waterShaderProgram = createShaderProgram(surfaceVertexShaderSource, waterFragmentShaderSource);
     skyboxShaderProgram = createShaderProgram(skyboxVertexShaderSource, skyboxFragmentShaderSource);
-    causticsShaderProgram = createShaderProgram(causticVertexShaderSource, causticsFragmentShaderSource, causticGeometryShaderSource);
-    bottomShaderProgram = createShaderProgram(surfaceVertexShaderSource, bottomFragmentShaderSource);
+    causticsShaderProgram = createShaderProgram(causticVertexShaderSource, causticsFragmentShaderSource);
+    bottomShaderProgram = createShaderProgram(bottomVertexShaderSource, bottomFragmentShaderSource);
 
     init_grid();
     add_disturbance(100, 100, 2.0f);
     add_disturbance(300, 300, 1.5f);
     add_disturbance(150, 250, 1.8f);
 
-    buildWaterIndices();
-    setupWaterBuffers();
+    buildWaterMesh();
     generateBottomMesh();
     generateSkyboxMesh();
 
     glEnable(GL_DEPTH_TEST);
     setupCausticsFBO();
+    setupHeightTexture();
 
     int exitCode = renderLoop();
 
@@ -641,6 +634,7 @@ int main(int argc, char** argv) {
     glDeleteBuffers(1, &skyboxVBO);
     glDeleteFramebuffers(1, &causticsFBO);
     glDeleteTextures(1, &causticsTexture);
+    glDeleteTextures(1, &heightTexture);
     glDeleteProgram(waterShaderProgram);
     glDeleteProgram(skyboxShaderProgram);
     glDeleteProgram(causticsShaderProgram);
