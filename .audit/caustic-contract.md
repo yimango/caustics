@@ -23,7 +23,7 @@ Rejected alternative. Write `1/|det d(hit)/d(x,y)|` into the texel under the sur
 | `CAUSTICS_RES` | 2048 |
 | Light position | (0, 0, 100) |
 | Mesh height | `height_current * 8` |
-| Mesh slope | one-texel central difference of `heightTex`; the visible normal multiplies that slope by 8 |
+| Mesh slope | Catmull-Rom sample of `heightTex` at plus and minus 0.5 world units; the visible normal multiplies that slope by 8 |
 
 Do not change `dx`, `dt`, `c`, `damping`, `width`, or `height`. Do not remove the height scale of 8.
 
@@ -50,7 +50,7 @@ std::vector<float> height_next;
 
 ## Mesh
 
-`buildWaterMesh` runs once. Vertex id is `x * height + y`, the same index as the height arrays. The buffer stores world xy and z = 0. Two triangles per cell. Both buffers are `GL_STATIC_DRAW`. The shader samples height and slope from `heightTex`.
+`buildWaterMesh` runs once. The simulation index stays `x * height + y`. The drawn mesh uses `meshSubdiv` 2, so each axis has `(n - 1) * 2 + 1` vertices. Vertex id on that mesh is `i * axisY + j`. The buffer stores world xy and z = 0. Two triangles per fine cell. Both buffers are `GL_STATIC_DRAW`. The shader samples height and slope from `heightTex`.
 
 ## Framebuffer and UV
 
@@ -85,13 +85,13 @@ UV (0, 0) is world (-200, -200). UV (1, 1) is world (200, 200). The ortho projec
 | Sky | `skyboxVertexShaderSource` | `skyboxFragmentShaderSource` |
 | Overlay | `overlayVertexShaderSource` | `overlayFragmentShaderSource` |
 
-`surfaceVertexShaderSource` samples `heightTex` and outputs `FragPos` and `Normal`. The slope is a one-texel central difference. Water uses it. The floor uses `bottomVertexShaderSource`, which is only the model-view-projection transform. The caustic pass uses `causticVertexShaderSource`.
+`surfaceVertexShaderSource` samples height with Catmull-Rom and outputs `FragPos` and `Normal`. The slope is that curve at plus and minus 0.5 world units. Water uses it. The floor uses `bottomVertexShaderSource`, which is only the model-view-projection transform. The caustic pass uses `causticVertexShaderSource`.
 
 `main` compiles the caustic program from `causticVertexShaderSource` and `causticsFragmentShaderSource`. The floor uses `bottomVertexShaderSource`.
 
 ## Caustic uniforms
 
-`main` uploads these on the caustic program. The caustic shaders read them. No other caustic uniform exists.
+`main` uploads these on the caustic program. The caustic shaders read them.
 
 | Uniform | Type | Value |
 | --- | --- | --- |
@@ -104,6 +104,7 @@ UV (0, 0) is world (-200, -200). UV (1, 1) is world (200, 200). The ortho projec
 | `airIOR` | float | 1.0 |
 | `heightScale` | float | `meshHeightScale` (8) |
 | `poolExtent` | float | `(width / 2) * waterScale` |
+| `meshSpacing` | float | world distance between drawn water vertices |
 
 `main` uploads `heightScale`, `poolExtent`, `gridSize`, and `heightTex` on texture unit 1. `poolExtent` is `(width / 2) * waterScale`. The height texture is R32F, one float per cell, updated with `glTexSubImage2D` after each wave step. There is no geometry shader, no `time` uniform, and no `receiverTexel` uniform.
 
@@ -117,7 +118,7 @@ Camera for the beauty pass stays `lookAt((90, -120, 95), (0, 0, -10), (0, 0, 1))
 
 ## Caustic vertex shader
 
-The mesh stores world xy. The shader samples `heightTex`. The optical normal is `normalize(vec3(-dhdx, -dhdy, 1))` from one-texel neighbors. The visible water normal multiplies that slope by `heightScale`.
+The mesh stores world xy. The shader samples `heightTex` with Catmull-Rom. The optical normal is `normalize(vec3(-dhdx, -dhdy, 1))` from that curve at plus and minus 0.5 world units. The visible water normal multiplies that slope by `heightScale`. The Jacobian step is `meshSpacing`.
 
 The ray starts at the simulated height, not the exaggerated mesh height. `gl_Position` is the floor hit. Intensity is a smooth varying.
 
