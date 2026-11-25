@@ -83,12 +83,12 @@ UV (0, 0) is world (-200, -200). UV (1, 1) is world (200, 200). The ortho projec
 | --- | --- | --- |
 | Water | `surfaceVertexShaderSource` | `waterFragmentShaderSource` |
 | Floor | `surfaceVertexShaderSource` | `bottomFragmentShaderSource` |
-| Caustics | `causticVertexShaderSource` | `causticsFragmentShaderSource` |
+| Caustics | `causticVertexShaderSource` plus `causticGeometryShaderSource` | `causticsFragmentShaderSource` |
 | Sky | `skyboxVertexShaderSource` | `skyboxFragmentShaderSource` |
 
 `surfaceVertexShaderSource` is only the model-view-projection transform. It outputs `FragPos` and `Normal`. Water and the floor use it. The caustic pass does not.
 
-`main` compiles the caustic program from `causticVertexShaderSource` and `causticsFragmentShaderSource`.
+`main` compiles the caustic program from `causticVertexShaderSource`, `causticGeometryShaderSource`, and `causticsFragmentShaderSource`.
 
 ## Caustic uniforms
 
@@ -105,7 +105,7 @@ UV (0, 0) is world (-200, -200). UV (1, 1) is world (200, 200). The ortho projec
 | `airIOR` | float | 1.0 |
 | `receiverTexel` | float | `(width * waterScale) / CAUSTICS_RES` |
 
-`receiverTexel` is the world width of one framebuffer pixel, 400/2048. There is no `time` uniform.
+`main` uploads `receiverTexel` as `(width * waterScale) / CAUSTICS_RES`. The geometry shader uses the locked half-extent 200 and does not read that uniform. There is no `time` uniform.
 
 Beauty pass uploads, unchanged except dropping `time`:
 
@@ -121,26 +121,35 @@ Inputs are `aPos` and `aNormal`. Outputs are `FragPos` (surface position in worl
 
 1. `P = (model * vec4(aPos, 1)).xyz`
 2. `N = normalize(normalMatrix * aNormal)`. If `N.z < 0`, negate `N`.
-3. `I = normalize(P - lightPos)`
-4. `eta = airIOR / max(waterIOR, 0.001)`
-5. `T = refract(I, N, eta)`
-6. If `T.z < -0.02`, `t = (bottomZ - P.z) / T.z`. If `t > 0`, `hit = P + T * t` and `casts = 1`.
-7. If `casts < 0.5`, set `gl_Position` to `vec4(2, 2, 2, 1)` so the triangle is clipped.
-8. Otherwise `gl_Position = projection * view * vec4(hit, 1)`.
+3. The mesh slope is already scaled by 8. The ray uses `optical = normalize(N.xy / N.z, 1)` and `origin = (P.xy, P.z / 8)`.
+4. `I = normalize(origin - lightPos)`
+5. `eta = airIOR / max(waterIOR, 0.001)`
+6. `T = refract(I, optical, eta)`
+7. If `T.z < -0.02`, `t = (bottomZ - origin.z) / T.z`. If `t > 0`, `hit = origin + T * t` and `casts = 1`.
+8. If `casts < 0.5`, set `gl_Position` to `vec4(2, 2, 2, 1)` so the triangle is clipped.
+9. Otherwise `gl_Position = projection * view * vec4(hit, 1)`.
 
 `FragPos` stays `P`. Do not write the hit into `FragPos`.
 
+## Caustic geometry shader
+
+`causticGeometryShaderSource` drops a triangle when any vertex has `casts < 0.5`. Otherwise it sets one flat intensity for the whole triangle.
+
+```
+source = abs(cross(FragPos[1].xy - FragPos[0].xy, FragPos[2].xy - FragPos[0].xy))
+receiver = abs(cross(hit1.xy - hit0.xy, hit2.xy - hit0.xy))
+intensity = clamp(source / max(receiver, 0.0001), 0.0, 6.0)
+```
+
+Hit positions come from clip space times 200, the pool half-extent. On flat water, `intensity` is about 1. Where the surface triangle lands on a smaller floor triangle, `intensity` rises. The cap is 6.
+
 ## Caustic fragment shader
 
-If `casts < 0.5`, discard.
-
 ```
-area = abs(dFdx(FragPos.x) * dFdy(FragPos.y) - dFdx(FragPos.y) * dFdy(FragPos.x))
-intensity = clamp(area / max(receiverTexel * receiverTexel, 1e-8), 0.0, 6.0)
-FragColor = vec4(intensity)
+FragColor = vec4(vIntensity)
 ```
 
-On flat water under this light, `intensity` is about 1. Where the surface squeezes onto fewer floor pixels, `intensity` rises. The cap is 6. The floor reads alpha, which matches the red channel.
+The floor reads alpha, which matches the red channel. A per-pixel derivative was tried first. It painted the triangle edges, so the area ratio lives in the geometry shader.
 
 ## Floor and water
 

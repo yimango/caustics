@@ -21,6 +21,9 @@
 #ifndef GL_PACK_ALIGNMENT
 #define GL_PACK_ALIGNMENT 0x0D05
 #endif
+#ifndef GL_GEOMETRY_SHADER
+#define GL_GEOMETRY_SHADER 0x8DD9
+#endif
 
 typedef void (APIENTRYP PFNGLREADPIXELSPROC)(GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, void*);
 typedef void (APIENTRYP PFNGLPIXELSTOREIPROC)(GLenum, GLint);
@@ -434,7 +437,7 @@ bool captureWindowBmp(const char* path) {
     return (bool)out;
 }
 
-unsigned int createShaderProgram(const char* vertexSource, const char* fragmentSource) {
+unsigned int createShaderProgram(const char* vertexSource, const char* fragmentSource, const char* geometrySource = nullptr) {
     unsigned int vertexShader = glCreateShader(GL_VERTEX_SHADER);
     glShaderSource(vertexShader, 1, &vertexSource, NULL);
     glCompileShader(vertexShader);
@@ -457,9 +460,24 @@ unsigned int createShaderProgram(const char* vertexSource, const char* fragmentS
         std::cerr << "ERROR::SHADER::FRAGMENT::COMPILATION_FAILED\n" << infoLog << std::endl;
     }
 
+    unsigned int geometryShader = 0;
+    if (geometrySource != nullptr) {
+        geometryShader = glCreateShader(GL_GEOMETRY_SHADER);
+        glShaderSource(geometryShader, 1, &geometrySource, NULL);
+        glCompileShader(geometryShader);
+        glGetShaderiv(geometryShader, GL_COMPILE_STATUS, &success);
+        if (!success) {
+            glGetShaderInfoLog(geometryShader, 512, NULL, infoLog);
+            std::cerr << "ERROR::SHADER::GEOMETRY::COMPILATION_FAILED\n" << infoLog << std::endl;
+        }
+    }
+
     unsigned int shaderProgram = glCreateProgram();
     glAttachShader(shaderProgram, vertexShader);
     glAttachShader(shaderProgram, fragmentShader);
+    if (geometryShader != 0) {
+        glAttachShader(shaderProgram, geometryShader);
+    }
     glLinkProgram(shaderProgram);
 
     glGetProgramiv(shaderProgram, GL_LINK_STATUS, &success);
@@ -470,6 +488,9 @@ unsigned int createShaderProgram(const char* vertexSource, const char* fragmentS
 
     glDeleteShader(vertexShader);
     glDeleteShader(fragmentShader);
+    if (geometryShader != 0) {
+        glDeleteShader(geometryShader);
+    }
 
     return shaderProgram;
 }
@@ -589,7 +610,7 @@ int main(int argc, char** argv) {
 
     waterShaderProgram = createShaderProgram(surfaceVertexShaderSource, waterFragmentShaderSource);
     skyboxShaderProgram = createShaderProgram(skyboxVertexShaderSource, skyboxFragmentShaderSource);
-    causticsShaderProgram = createShaderProgram(causticVertexShaderSource, causticsFragmentShaderSource);
+    causticsShaderProgram = createShaderProgram(causticVertexShaderSource, causticsFragmentShaderSource, causticGeometryShaderSource);
     bottomShaderProgram = createShaderProgram(surfaceVertexShaderSource, bottomFragmentShaderSource);
 
     init_grid();

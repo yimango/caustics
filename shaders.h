@@ -43,17 +43,19 @@ const char* causticVertexShaderSource = R"(
         if (N.z < 0.0) {
             N = -N;
         }
+        vec3 optical = normalize(vec3(N.xy / max(N.z, 0.0001), 1.0));
 
-        vec3 I = normalize(P - lightPos);
+        vec3 origin = vec3(P.xy, P.z / 8.0);
+        vec3 I = normalize(origin - lightPos);
         float eta = airIOR / max(waterIOR, 0.001);
-        vec3 T = refract(I, N, eta);
+        vec3 T = refract(I, optical, eta);
 
         casts = 0.0;
-        vec3 hit = P;
+        vec3 hit = origin;
         if (T.z < -0.02) {
-            float t = (bottomZ - P.z) / T.z;
+            float t = (bottomZ - origin.z) / T.z;
             if (t > 0.0) {
-                hit = P + T * t;
+                hit = origin + T * t;
                 casts = 1.0;
             }
         }
@@ -66,6 +68,39 @@ const char* causticVertexShaderSource = R"(
 
         FragPos = P;
         Normal = N;
+    }
+)";
+
+const char* causticGeometryShaderSource = R"(
+    #version 330 core
+    layout(triangles) in;
+    layout(triangle_strip, max_vertices = 3) out;
+
+    in vec3 FragPos[];
+    in float casts[];
+    flat out float vIntensity;
+
+    void main() {
+        if (casts[0] < 0.5 || casts[1] < 0.5 || casts[2] < 0.5) {
+            return;
+        }
+
+        vec2 a = FragPos[0].xy;
+        vec2 b = FragPos[1].xy;
+        vec2 c = FragPos[2].xy;
+        float source = abs((b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y));
+
+        vec2 h0 = gl_in[0].gl_Position.xy / gl_in[0].gl_Position.w * 200.0;
+        vec2 h1 = gl_in[1].gl_Position.xy / gl_in[1].gl_Position.w * 200.0;
+        vec2 h2 = gl_in[2].gl_Position.xy / gl_in[2].gl_Position.w * 200.0;
+        float receiver = abs((h1.x - h0.x) * (h2.y - h0.y) - (h2.x - h0.x) * (h1.y - h0.y));
+        vIntensity = clamp(source / max(receiver, 0.0001), 0.0, 6.0);
+
+        for (int i = 0; i < 3; ++i) {
+            gl_Position = gl_in[i].gl_Position;
+            EmitVertex();
+        }
+        EndPrimitive();
     }
 )";
 
@@ -100,21 +135,12 @@ const char* skyboxFragmentShaderSource = R"(
 
 const char* causticsFragmentShaderSource = R"(
     #version 330 core
-    in vec3 FragPos;
-    in float casts;
+    flat in float vIntensity;
 
     out vec4 FragColor;
 
-    uniform float receiverTexel;
-
     void main() {
-        if (casts < 0.5) {
-            discard;
-        }
-
-        float area = abs(dFdx(FragPos.x) * dFdy(FragPos.y) - dFdx(FragPos.y) * dFdy(FragPos.x));
-        float intensity = clamp(area / max(receiverTexel * receiverTexel, 1e-8), 0.0, 6.0);
-        FragColor = vec4(intensity);
+        FragColor = vec4(vIntensity);
     }
 )";
 
