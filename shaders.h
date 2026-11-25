@@ -1,9 +1,5 @@
 #pragma once
 
-// One vertex shader for the water, the pool floor, and the caustic pass.
-// The caustic fragment writes intensity in alpha. The floor reads that alpha
-// with UV (FragPos.xy + 200) / 400, the pool from -200 to 200.
-
 const char* surfaceVertexShaderSource = R"(
     #version 330 core
     layout (location = 0) in vec3 aPos;
@@ -30,34 +26,46 @@ const char* causticVertexShaderSource = R"(
 
     out vec3 FragPos;
     out vec3 Normal;
+    out float casts;
 
     uniform mat4 model;
     uniform mat4 view;
     uniform mat4 projection;
+    uniform vec3 lightPos;
+    uniform float bottomZ;
+    uniform float waterIOR;
+    uniform float airIOR;
 
     void main() {
-        FragPos = vec3(model * vec4(aPos, 1.0));
-        Normal = mat3(transpose(inverse(model))) * aNormal;
-        gl_Position = projection * view * vec4(FragPos, 1.0);
-    }
-)";
+        vec3 P = (model * vec4(aPos, 1.0)).xyz;
+        mat3 normalMatrix = mat3(transpose(inverse(model)));
+        vec3 N = normalize(normalMatrix * aNormal);
+        if (N.z < 0.0) {
+            N = -N;
+        }
 
-const char* causticVertexShaderSource = R"(
-    #version 330 core
-    layout (location = 0) in vec3 aPos;
-    layout (location = 1) in vec3 aNormal;
+        vec3 I = normalize(P - lightPos);
+        float eta = airIOR / max(waterIOR, 0.001);
+        vec3 T = refract(I, N, eta);
 
-    out vec3 FragPos;
-    out vec3 Normal;
+        casts = 0.0;
+        vec3 hit = P;
+        if (T.z < -0.02) {
+            float t = (bottomZ - P.z) / T.z;
+            if (t > 0.0) {
+                hit = P + T * t;
+                casts = 1.0;
+            }
+        }
 
-    uniform mat4 model;
-    uniform mat4 view;
-    uniform mat4 projection;
+        if (casts < 0.5) {
+            gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+        } else {
+            gl_Position = projection * view * vec4(hit, 1.0);
+        }
 
-    void main() {
-        FragPos = vec3(model * vec4(aPos, 1.0));
-        Normal = mat3(transpose(inverse(model))) * aNormal;
-        gl_Position = projection * view * vec4(FragPos, 1.0);
+        FragPos = P;
+        Normal = N;
     }
 )";
 
@@ -93,52 +101,39 @@ const char* skyboxFragmentShaderSource = R"(
 const char* causticsFragmentShaderSource = R"(
     #version 330 core
     in vec3 FragPos;
-    in vec3 Normal;
+    in float casts;
 
     out vec4 FragColor;
 
-    uniform vec3 lightPos;
-    uniform float bottomZ;
-    uniform float waterIOR;
-    uniform float airIOR;
-    uniform float time;
+    uniform float receiverTexel;
 
     void main() {
-        vec3 N = normalize(Normal);
-        if (N.z < 0.0) {
-            N = -N;
+        if (casts < 0.5) {
+            discard;
         }
 
-        vec3 I = vec3(0.0, 0.0, -1.0);
-        vec3 T = refract(I, N, airIOR / max(waterIOR, 0.001));
-        float intensity = 0.0;
-        if (T.z < -0.02) {
-            float bend = length(T.xy);
-            intensity = clamp(bend * 6.0, 0.0, 1.0) * max(N.z, 0.0);
-        }
-
-        FragColor = vec4(0.0, 0.0, 0.0, intensity);
+        float area = abs(dFdx(FragPos.x) * dFdy(FragPos.y) - dFdx(FragPos.y) * dFdy(FragPos.x));
+        float intensity = clamp(area / max(receiverTexel * receiverTexel, 1e-8), 0.0, 6.0);
+        FragColor = vec4(intensity);
     }
 )";
 
 const char* bottomFragmentShaderSource = R"(
     #version 330 core
     in vec3 FragPos;
-    in vec3 Normal;
 
     out vec4 FragColor;
 
     uniform sampler2D causticsTexture;
-    uniform float time;
 
     void main() {
         vec2 causticsUV = (FragPos.xy + vec2(200.0)) / 400.0;
         float causticIntensity = texture(causticsTexture, causticsUV).a;
-
-        vec3 floorColor = vec3(0.06, 0.16, 0.22);
-        vec3 warm = vec3(1.50, 1.18, 0.62);
-        vec3 finalColor = floorColor + warm * causticIntensity;
-        FragColor = vec4(clamp(finalColor, 0.0, 1.0), 1.0);
+        float light = causticIntensity;
+        vec3 floorColor = vec3(0.05, 0.14, 0.20);
+        vec3 lit = floorColor * (0.25 + light);
+        vec3 hot = vec3(1.45, 1.15, 0.62) * max(light - 1.0, 0.0);
+        FragColor = vec4(clamp(lit + hot, 0.0, 1.0), 1.0);
     }
 )";
 
