@@ -67,6 +67,8 @@ const float BOTTOM_Z = -30.0f;
 GLFWwindow* window;
 unsigned int waterVAO, waterVBO, waterEBO;
 unsigned int bottomVAO, bottomVBO, bottomEBO;
+int floorIndexCount = 0;
+int bottomIndexCount = 0;
 unsigned int skyboxVAO, skyboxVBO;
 unsigned int causticsFBO, causticsTexture;
 unsigned int heightTexture;
@@ -248,22 +250,69 @@ bool initGL() {
     return true;
 }
 
+void appendBottomVertex(std::vector<float>& vertices, float x, float y, float z) {
+    vertices.push_back(x);
+    vertices.push_back(y);
+    vertices.push_back(z);
+    vertices.push_back(0.0f);
+    vertices.push_back(0.0f);
+    vertices.push_back(1.0f);
+}
+
+void appendBottomQuad(std::vector<unsigned int>& indices, unsigned int i0, unsigned int i1, unsigned int i2, unsigned int i3) {
+    indices.push_back(i0);
+    indices.push_back(i1);
+    indices.push_back(i2);
+    indices.push_back(i2);
+    indices.push_back(i3);
+    indices.push_back(i0);
+}
+
 void generateBottomMesh() {
     float bottomZ = BOTTOM_Z;
+    float lipZ = 18.0f;
     float halfWidth = (width / 2.0f) * waterScale;
     float halfHeight = (height / 2.0f) * waterScale;
 
-    float bottomVertices[] = {
-        -halfWidth, -halfHeight, bottomZ,  0.0f, 0.0f, 1.0f,
-         halfWidth, -halfHeight, bottomZ,  0.0f, 0.0f, 1.0f,
-         halfWidth,  halfHeight, bottomZ,  0.0f, 0.0f, 1.0f,
-        -halfWidth,  halfHeight, bottomZ,  0.0f, 0.0f, 1.0f
-    };
+    std::vector<float> vertices;
+    std::vector<unsigned int> indices;
 
-    unsigned int bottomIndices[] = {
-        0, 1, 2,
-        2, 3, 0
-    };
+    appendBottomVertex(vertices, -halfWidth, -halfHeight, bottomZ);
+    appendBottomVertex(vertices, halfWidth, -halfHeight, bottomZ);
+    appendBottomVertex(vertices, halfWidth, halfHeight, bottomZ);
+    appendBottomVertex(vertices, -halfWidth, halfHeight, bottomZ);
+    appendBottomQuad(indices, 0, 1, 2, 3);
+    floorIndexCount = (int)indices.size();
+
+    unsigned int south = (unsigned int)(vertices.size() / 6);
+    appendBottomVertex(vertices, -halfWidth, -halfHeight, bottomZ);
+    appendBottomVertex(vertices, halfWidth, -halfHeight, bottomZ);
+    appendBottomVertex(vertices, halfWidth, -halfHeight, lipZ);
+    appendBottomVertex(vertices, -halfWidth, -halfHeight, lipZ);
+    appendBottomQuad(indices, south, south + 1, south + 2, south + 3);
+
+    unsigned int east = (unsigned int)(vertices.size() / 6);
+    appendBottomVertex(vertices, halfWidth, -halfHeight, bottomZ);
+    appendBottomVertex(vertices, halfWidth, halfHeight, bottomZ);
+    appendBottomVertex(vertices, halfWidth, halfHeight, lipZ);
+    appendBottomVertex(vertices, halfWidth, -halfHeight, lipZ);
+    appendBottomQuad(indices, east, east + 1, east + 2, east + 3);
+
+    unsigned int north = (unsigned int)(vertices.size() / 6);
+    appendBottomVertex(vertices, halfWidth, halfHeight, bottomZ);
+    appendBottomVertex(vertices, -halfWidth, halfHeight, bottomZ);
+    appendBottomVertex(vertices, -halfWidth, halfHeight, lipZ);
+    appendBottomVertex(vertices, halfWidth, halfHeight, lipZ);
+    appendBottomQuad(indices, north, north + 1, north + 2, north + 3);
+
+    unsigned int west = (unsigned int)(vertices.size() / 6);
+    appendBottomVertex(vertices, -halfWidth, halfHeight, bottomZ);
+    appendBottomVertex(vertices, -halfWidth, -halfHeight, bottomZ);
+    appendBottomVertex(vertices, -halfWidth, -halfHeight, lipZ);
+    appendBottomVertex(vertices, -halfWidth, halfHeight, lipZ);
+    appendBottomQuad(indices, west, west + 1, west + 2, west + 3);
+
+    bottomIndexCount = (int)indices.size();
 
     glGenVertexArrays(1, &bottomVAO);
     glGenBuffers(1, &bottomVBO);
@@ -272,10 +321,10 @@ void generateBottomMesh() {
     glBindVertexArray(bottomVAO);
 
     glBindBuffer(GL_ARRAY_BUFFER, bottomVBO);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(bottomVertices), bottomVertices, GL_STATIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(vertices.size() * sizeof(float)), vertices.data(), GL_STATIC_DRAW);
 
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, bottomEBO);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(bottomIndices), bottomIndices, GL_STATIC_DRAW);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)(indices.size() * sizeof(unsigned int)), indices.data(), GL_STATIC_DRAW);
 
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
@@ -552,8 +601,10 @@ int renderLoop() {
         glBindTexture(GL_TEXTURE_2D, causticsTexture);
         glUniform1i(glGetUniformLocation(bottomShaderProgram, "causticsTexture"), 0);
         glUniform1f(glGetUniformLocation(bottomShaderProgram, "poolExtent"), extent);
+        glUniform1f(glGetUniformLocation(bottomShaderProgram, "bottomZ"), BOTTOM_Z);
         glBindVertexArray(bottomVAO);
-        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+        glDrawElements(GL_TRIANGLES, floorIndexCount, GL_UNSIGNED_INT, 0);
+        glDrawElements(GL_TRIANGLES, bottomIndexCount - floorIndexCount, GL_UNSIGNED_INT, (void*)(floorIndexCount * sizeof(unsigned int)));
 
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);

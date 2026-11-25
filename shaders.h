@@ -204,8 +204,15 @@ const char* bottomFragmentShaderSource = R"(
 
     uniform sampler2D causticsTexture;
     uniform float poolExtent;
+    uniform float bottomZ;
 
     void main() {
+        if (FragPos.z > bottomZ + 0.5) {
+            float band = fract(FragPos.z * 0.15);
+            vec3 stone = mix(vec3(0.45, 0.48, 0.46), vec3(0.28, 0.34, 0.36), band);
+            FragColor = vec4(stone, 1.0);
+            return;
+        }
         vec2 causticsUV = (FragPos.xy + vec2(poolExtent)) / (poolExtent * 2.0);
         vec2 texel = vec2(1.0 / 2048.0);
         float center = texture(causticsTexture, causticsUV).r;
