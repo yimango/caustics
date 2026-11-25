@@ -204,8 +204,15 @@ const char* bottomFragmentShaderSource = R"(
 
     uniform sampler2D causticsTexture;
     uniform float poolExtent;
+    uniform float bottomZ;
 
     void main() {
+        if (FragPos.z > bottomZ + 0.5) {
+            float band = fract(FragPos.z * 0.15);
+            vec3 stone = mix(vec3(0.45, 0.48, 0.46), vec3(0.28, 0.34, 0.36), band);
+            FragColor = vec4(stone, 1.0);
+            return;
+        }
         vec2 causticsUV = (FragPos.xy + vec2(poolExtent)) / (poolExtent * 2.0);
         vec2 texel = vec2(1.0 / 2048.0);
         float center = texture(causticsTexture, causticsUV).r;
@@ -214,10 +221,19 @@ const char* bottomFragmentShaderSource = R"(
         float down = texture(causticsTexture, causticsUV + vec2(0.0, -texel.y)).r;
         float up = texture(causticsTexture, causticsUV + vec2(0.0, texel.y)).r;
         float light = center * 0.5 + (left + right + down + up) * 0.125;
-        vec3 floorColor = vec3(0.04, 0.11, 0.16);
-        vec3 lit = floorColor * (0.35 + 0.45 * light);
-        vec3 hot = vec3(1.35, 1.05, 0.55) * max(light - 1.0, 0.0);
-        FragColor = vec4(clamp(lit + hot, 0.0, 1.0), 1.0);
+        vec2 tile = FragPos.xy / 25.0;
+        vec2 cell = fract(tile);
+        float groutLine = 0.06;
+        vec3 albedo = vec3(0.62, 0.70, 0.66);
+        if (mod(floor(tile.x) + floor(tile.y), 2.0) > 0.5) {
+            albedo = vec3(0.33, 0.50, 0.52);
+        }
+        if (cell.x < groutLine || cell.y < groutLine) {
+            albedo = vec3(0.16, 0.22, 0.24);
+        }
+        float tone = light / (1.0 + 0.85 * max(light - 0.65, 0.0));
+        vec3 color = albedo * (0.42 + 1.15 * tone);
+        FragColor = vec4(clamp(color, 0.0, 1.0), 1.0);
     }
 )";
 
@@ -248,6 +264,30 @@ const char* waterFragmentShaderSource = R"(
         color += vec3(0.85, 0.92, 1.0) * spec * 0.45;
 
         float alpha = mix(0.28, 0.52, fresnel);
+        FragColor = vec4(color, alpha);
+    }
+)";
+
+const char* overlayVertexShaderSource = R"(
+    #version 330 core
+    layout (location = 0) in vec2 aPos;
+
+    uniform vec2 viewport;
+
+    void main() {
+        vec2 ndc = vec2(aPos.x / viewport.x * 2.0 - 1.0, aPos.y / viewport.y * 2.0 - 1.0);
+        gl_Position = vec4(ndc, 0.0, 1.0);
+    }
+)";
+
+const char* overlayFragmentShaderSource = R"(
+    #version 330 core
+    uniform vec3 color;
+    uniform float alpha;
+
+    out vec4 FragColor;
+
+    void main() {
         FragColor = vec4(color, alpha);
     }
 )";
