@@ -8,15 +8,25 @@ Caustics follow Snell's law. `shaders.h` holds the shaders. The caustic pass sen
 
 ## Build
 
-You need OpenGL 3.3, CMake 3.15, and a C++17 compiler. This tree is set up for Windows. GLFW headers are under `external/glfw-3.4.bin.WIN64`. The import library in `lib-mingw-w64` is not in git. GLM is the `external/glm` pin.
+You need OpenGL 3.3, CMake 3.15, and MinGW-w64 g++ with C++17. This tree builds on Windows. Put `gcc` and `g++` on `PATH`.
+
+GLM is a submodule at `external/glm`. The recorded commit is `2d4c4b4dd31fde06cfffad7915c2b3006402322f` from [g-truc/glm](https://github.com/g-truc/glm). A clone leaves that folder empty until you initialize it.
 
 ```
-mkdir build
-cd build
-cmake ..
-cmake --build . --config Release
+git submodule update --init external/glm
 ```
 
-From `build`, run `caustics.exe`.
+GLFW headers are in `external/glfw-3.4.bin.WIN64`. The MinGW libraries are not in git. `.gitignore` ignores `**/lib-*/`, `*.a`, and `*.dll`. Download the [GLFW 3.4 64-bit Windows binaries](https://github.com/glfw/glfw/releases/download/3.4/glfw-3.4.bin.WIN64.zip). Copy `lib-mingw-w64` from that zip into `external/glfw-3.4.bin.WIN64/`. CMake links `libglfw3.a` from that folder.
 
-`verify/check.ps1` checks that the wave step stays finite and bounded.
+```
+cmake -G "MinGW Makefiles" -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -S . -B build
+cmake --build build
+```
+
+Run `build/caustics.exe`.
+
+`verify/check.ps1` checks that the wave step stays finite and bounded. It links stub GLFW symbols and does not need `libglfw3.a`. From the repo root:
+
+```
+powershell -ExecutionPolicy Bypass -File verify/check.ps1
+```
