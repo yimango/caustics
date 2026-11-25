@@ -1,6 +1,6 @@
 # Water caustics
 
-The pool is a 400 by 400 wave grid. The floor is a checker of 25-unit tiles with grout. Four walls run from the floor at z = -30 up to z = 18 and shade as stone above the water. AMP, SCALE, and TEMPO sliders drive the wind. A click outside the panel adds a drop of height 5. Escape closes the window.
+The pool is a 400 by 400 wave grid. The floor is a checker of 25-unit tiles with grout. Four walls run from z = -30 up to z = 18. They shade as stone, except a thin band at the floor that shows caustics. AMP, SCALE, and TEMPO sliders drive the wind. A click outside the panel adds a drop of height 5. Escape closes the window.
 
 The water mesh has one vertex per cell and stores world xy. Height and slope come from an R32F height texture, one float per cell. The slope is a one-texel central difference, so the drawn ripples follow the grid.
 
