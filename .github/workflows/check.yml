@@ -27,6 +27,8 @@ jobs:
         run: |
           $zip = Join-Path $env:RUNNER_TEMP "glfw.zip"
           Invoke-WebRequest -Uri "https://github.com/glfw/glfw/releases/download/3.4/glfw-3.4.bin.WIN64.zip" -OutFile $zip
+          $hash = (Get-FileHash -Algorithm SHA256 -Path $zip).Hash
+          if ($hash -ne "54EFA829400F2A0537F742B2B3BDD74E437BB4F2F048E4B7D3C5557D11A611E6") { throw "GLFW zip sha256 mismatch: $hash" }
           Expand-Archive -Path $zip -DestinationPath $env:RUNNER_TEMP
           Copy-Item -Recurse (Join-Path $env:RUNNER_TEMP "glfw-3.4.bin.WIN64\lib-mingw-w64") "external\glfw-3.4.bin.WIN64\lib-mingw-w64"
 
