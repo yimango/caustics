@@ -52,7 +52,7 @@ if(GLFW_LIBRARY)
         target_include_directories(caustics PRIVATE ${GLFW_INCLUDE_DIR})
     endif()
 else()
-    message(WARNING "GLFW not found. You may need to install GLFW manually or via vcpkg.")
+    message(FATAL_ERROR "Missing external/glfw-3.4.bin.WIN64/lib-mingw-w64/libglfw3.a. Copy lib-mingw-w64 from the GLFW 3.4 Windows zip. See README.md.")
 endif()
 
 set_target_properties(caustics PROPERTIES
