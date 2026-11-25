@@ -1,6 +1,5 @@
 #include <vector>
 #include <iostream>
-#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -28,8 +27,6 @@ typedef void (APIENTRYP PFNGLPIXELSTOREIPROC)(GLenum, GLint);
 
 PFNGLREADPIXELSPROC readPixelsFn = nullptr;
 PFNGLPIXELSTOREIPROC pixelStoreFn = nullptr;
-
-using namespace std;
 
 int width = 400;
 int height = 400;
@@ -171,80 +168,8 @@ void processInput(GLFWwindow* win) {
     }
 }
 
-void multiplyMat4(const float* a, const float* b, float* out) {
-    for (int col = 0; col < 4; ++col) {
-        for (int row = 0; row < 4; ++row) {
-            out[col * 4 + row] =
-                a[0 * 4 + row] * b[col * 4 + 0] +
-                a[1 * 4 + row] * b[col * 4 + 1] +
-                a[2 * 4 + row] * b[col * 4 + 2] +
-                a[3 * 4 + row] * b[col * 4 + 3];
-        }
-    }
-}
-
-bool invertMat4(const float* m, float* inv) {
-    double a[4][8];
-    for (int col = 0; col < 4; ++col) {
-        for (int row = 0; row < 4; ++row) {
-            a[row][col] = m[col * 4 + row];
-            a[row][col + 4] = (row == col) ? 1.0 : 0.0;
-        }
-    }
-    for (int col = 0; col < 4; ++col) {
-        int pivot = col;
-        double best = std::fabs(a[col][col]);
-        for (int row = col + 1; row < 4; ++row) {
-            double value = std::fabs(a[row][col]);
-            if (value > best) {
-                best = value;
-                pivot = row;
-            }
-        }
-        if (best < 1e-12) {
-            return false;
-        }
-        if (pivot != col) {
-            for (int k = 0; k < 8; ++k) {
-                double tmp = a[col][k];
-                a[col][k] = a[pivot][k];
-                a[pivot][k] = tmp;
-            }
-        }
-        double div = a[col][col];
-        for (int k = 0; k < 8; ++k) {
-            a[col][k] /= div;
-        }
-        for (int row = 0; row < 4; ++row) {
-            if (row == col) {
-                continue;
-            }
-            double factor = a[row][col];
-            for (int k = 0; k < 8; ++k) {
-                a[row][k] -= factor * a[col][k];
-            }
-        }
-    }
-    for (int col = 0; col < 4; ++col) {
-        for (int row = 0; row < 4; ++row) {
-            inv[col * 4 + row] = (float)a[row][col + 4];
-        }
-    }
-    return true;
-}
-
-void transformPoint(const float* m, float x, float y, float z, float w, float* out) {
-    out[0] = m[0] * x + m[4] * y + m[8] * z + m[12] * w;
-    out[1] = m[1] * x + m[5] * y + m[9] * z + m[13] * w;
-    out[2] = m[2] * x + m[6] * y + m[10] * z + m[14] * w;
-    out[3] = m[3] * x + m[7] * y + m[11] * z + m[15] * w;
-}
-
 void mouse_button_callback(GLFWwindow* win, int button, int action, int) {
     if (button != GLFW_MOUSE_BUTTON_LEFT || action != GLFW_PRESS) {
-        return;
-    }
-    if (framebufferWidth <= 0 || framebufferHeight <= 0) {
         return;
     }
 
@@ -252,41 +177,32 @@ void mouse_button_callback(GLFWwindow* win, int button, int action, int) {
     double ypos = 0.0;
     glfwGetCursorPos(win, &xpos, &ypos);
 
-    float viewM[16];
-    float projM[16];
-    std::memcpy(viewM, glm::value_ptr(beautyView), sizeof(viewM));
-    std::memcpy(projM, glm::value_ptr(beautyProjection), sizeof(projM));
-    float viewProj[16];
-    float invViewProj[16];
-    multiplyMat4(projM, viewM, viewProj);
-    if (!invertMat4(viewProj, invViewProj)) {
+    int fbW = 0;
+    int fbH = 0;
+    glfwGetFramebufferSize(win, &fbW, &fbH);
+    int winW = 0;
+    int winH = 0;
+    glfwGetWindowSize(win, &winW, &winH);
+    if (fbW <= 0 || fbH <= 0 || winW <= 0 || winH <= 0) {
         return;
     }
 
-    float ndcX = (2.0f * (float)xpos) / (float)framebufferWidth - 1.0f;
-    float ndcY = 1.0f - (2.0f * (float)ypos) / (float)framebufferHeight;
-    float nearP[4];
-    float farP[4];
-    transformPoint(invViewProj, ndcX, ndcY, -1.0f, 1.0f, nearP);
-    transformPoint(invViewProj, ndcX, ndcY, 1.0f, 1.0f, farP);
-    if (nearP[3] == 0.0f || farP[3] == 0.0f) {
+    float cursorX = (float)xpos * (float)fbW / (float)winW;
+    float cursorY = (float)fbH - (float)ypos * (float)fbH / (float)winH;
+    glm::vec4 viewport(0.0f, 0.0f, (float)fbW, (float)fbH);
+    glm::vec3 nearPoint = glm::unProject(glm::vec3(cursorX, cursorY, 0.0f), beautyView, beautyProjection, viewport);
+    glm::vec3 farPoint = glm::unProject(glm::vec3(cursorX, cursorY, 1.0f), beautyView, beautyProjection, viewport);
+    glm::vec3 ray = farPoint - nearPoint;
+    if (ray.z == 0.0f) {
         return;
     }
-    float nx = nearP[0] / nearP[3];
-    float ny = nearP[1] / nearP[3];
-    float nz = nearP[2] / nearP[3];
-    float fx = farP[0] / farP[3];
-    float fy = farP[1] / farP[3];
-    float fz = farP[2] / farP[3];
-    float dz = fz - nz;
-    if (dz == 0.0f) {
+    float t = -nearPoint.z / ray.z;
+    if (t < 0.0f) {
         return;
     }
-    float t = -nz / dz;
-    float hitX = nx + (fx - nx) * t;
-    float hitY = ny + (fy - ny) * t;
-    int gridX = (int)(hitX / waterScale + width / 2.0f);
-    int gridY = (int)(hitY / waterScale + height / 2.0f);
+    glm::vec3 hit = nearPoint + ray * t;
+    int gridX = (int)(hit.x / waterScale + width / 2);
+    int gridY = (int)(hit.y / waterScale + height / 2);
     if (gridX >= 0 && gridX < width && gridY >= 0 && gridY < height) {
         add_disturbance(gridX, gridY, 5.0f);
     }
