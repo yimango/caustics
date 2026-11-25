@@ -214,10 +214,19 @@ const char* bottomFragmentShaderSource = R"(
         float down = texture(causticsTexture, causticsUV + vec2(0.0, -texel.y)).r;
         float up = texture(causticsTexture, causticsUV + vec2(0.0, texel.y)).r;
         float light = center * 0.5 + (left + right + down + up) * 0.125;
-        vec3 floorColor = vec3(0.04, 0.11, 0.16);
-        vec3 lit = floorColor * (0.35 + 0.45 * light);
-        vec3 hot = vec3(1.35, 1.05, 0.55) * max(light - 1.0, 0.0);
-        FragColor = vec4(clamp(lit + hot, 0.0, 1.0), 1.0);
+        vec2 tile = FragPos.xy / 25.0;
+        vec2 cell = fract(tile);
+        float groutLine = 0.06;
+        vec3 albedo = vec3(0.62, 0.70, 0.66);
+        if (mod(floor(tile.x) + floor(tile.y), 2.0) > 0.5) {
+            albedo = vec3(0.33, 0.50, 0.52);
+        }
+        if (cell.x < groutLine || cell.y < groutLine) {
+            albedo = vec3(0.16, 0.22, 0.24);
+        }
+        float tone = light / (1.0 + 0.85 * max(light - 0.65, 0.0));
+        vec3 color = albedo * (0.42 + 1.15 * tone);
+        FragColor = vec4(clamp(color, 0.0, 1.0), 1.0);
     }
 )";
 
