@@ -207,6 +207,37 @@ const char* causticsFragmentShaderSource = R"(
     }
 )";
 
+const char* causticBlurVertexShaderSource = R"(
+    #version 330 core
+    void main() {
+        vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+        gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+    }
+)";
+
+const char* causticBlurFragmentShaderSource = R"(
+    #version 330 core
+    out vec4 FragColor;
+
+    uniform sampler2D source;
+    uniform vec2 direction;
+
+    void main() {
+        float texel = abs(direction.x) + abs(direction.y);
+        vec2 uv = gl_FragCoord.xy * texel;
+        float sigma = 6.0;
+        vec4 sum = vec4(0.0);
+        float weightSum = 0.0;
+        for (int i = -18; i <= 18; ++i) {
+            float x = float(i);
+            float w = exp(-0.5 * x * x / (sigma * sigma));
+            sum += texture(source, uv + direction * x) * w;
+            weightSum += w;
+        }
+        FragColor = sum / weightSum;
+    }
+)";
+
 const char* bottomFragmentShaderSource = R"(
     #version 330 core
     in vec3 FragPos;
@@ -225,13 +256,7 @@ const char* bottomFragmentShaderSource = R"(
             return;
         }
         vec2 causticsUV = (FragPos.xy + vec2(poolExtent)) / (poolExtent * 2.0);
-        vec2 texel = vec2(1.0 / 2048.0);
-        float center = texture(causticsTexture, causticsUV).r;
-        float left = texture(causticsTexture, causticsUV + vec2(-texel.x, 0.0)).r;
-        float right = texture(causticsTexture, causticsUV + vec2(texel.x, 0.0)).r;
-        float down = texture(causticsTexture, causticsUV + vec2(0.0, -texel.y)).r;
-        float up = texture(causticsTexture, causticsUV + vec2(0.0, texel.y)).r;
-        float light = center * 0.5 + (left + right + down + up) * 0.125;
+        float light = texture(causticsTexture, causticsUV).r;
         vec2 tile = FragPos.xy / 25.0;
         vec2 cell = fract(tile);
         float groutLine = 0.06;

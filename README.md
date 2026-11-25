@@ -4,7 +4,7 @@ The pool is a 400 by 400 wave grid. The floor is a checker of 25-unit tiles with
 
 The water mesh uses two vertices per simulation cell and stores world xy. Height and slope come from an R32F height texture, one float per cell. The slope is a Catmull-Rom sample at plus and minus 0.5 world units.
 
-Caustics follow Snell's law. `shaders.h` holds the shaders. The caustic pass sends each water vertex to the pool floor along the refracted ray and writes how much surface lands on each floor pixel. The floor reads that map through a 5-tap cross.
+Caustics follow Snell's law. One light sits at (0, 0, 100). There is no dispersion. `shaders.h` holds the shaders. The caustic pass sends each water vertex to the pool floor along the refracted ray and writes how much surface lands on each floor pixel. A separable Gaussian blur with sigma 6 texels spreads each sample on the 2048 light map. The floor reads that map once and shows it on the tiles.
 
 ## Build
 
@@ -25,7 +25,7 @@ cmake --build build
 
 Run `build/caustics.exe`.
 
-`verify/check.ps1` checks that the wave step stays finite and bounded. It links stub GLFW symbols and does not need `libglfw3.a`. From the repo root:
+`verify/check.ps1` checks that the wave step stays finite and bounded. It links stub GLFW symbols and does not need `libglfw3.a`. `verify/ring_band.py` reads one dump. It prints the fraction of annulus pixels above the 90th percentile luminance that sit in the largest edge-connected piece. The annulus is world radius 94 to 120. From the repo root:
 
 ```
 powershell -ExecutionPolicy Bypass -File verify/check.ps1
