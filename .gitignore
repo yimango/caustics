@@ -53,7 +53,17 @@ packages/
 **/docs/
 **/examples/
 **/bin/
+
+# GLFW import libraries under external/glfw-3.4.bin.WIN64/lib-mingw-w64 stay local.
+# verify/glfw_link_stubs.c links the wave check. The app links the local .a.
 **/lib-*/
+
+# Audit captures. .audit/caustic-contract.md stays tracked.
+.audit/*.png
+.audit/*.bmp
+.audit/*.tsv
+.audit/*.err
+.audit/*.out
 
 # Logs and temporary files
 *.log
