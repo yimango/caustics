@@ -74,9 +74,9 @@ const char* surfaceVertexShaderSource = R"(
     void main() {
         vec2 xy = (model * vec4(aPos, 1.0)).xy;
         float h = sampleHeight(xy);
-        float dhdx;
-        float dhdy;
-        heightSlope(xy, dhdx, dhdy);
+        float span = 8.0;
+        float dhdx = (sampleHeight(xy + vec2(span, 0.0)) - sampleHeight(xy - vec2(span, 0.0))) / (span * 2.0);
+        float dhdy = (sampleHeight(xy + vec2(0.0, span)) - sampleHeight(xy - vec2(0.0, span))) / (span * 2.0);
         FragPos = vec3(xy, h * heightScale);
         Normal = normalize(vec3(-dhdx * heightScale, -dhdy * heightScale, 1.0));
         gl_Position = projection * view * vec4(FragPos, 1.0);

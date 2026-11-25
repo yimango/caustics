@@ -23,7 +23,7 @@ Rejected alternative. Write `1/|det d(hit)/d(x,y)|` into the texel under the sur
 | `CAUSTICS_RES` | 2048 |
 | Light position | (0, 0, 100) |
 | Mesh height | `height_current * 8` |
-| Mesh slope | Catmull-Rom sample of `heightTex` at plus and minus 0.5 world units; the visible normal multiplies that slope by 8 |
+| Mesh slope | Visible slope is the Catmull-Rom height at plus and minus 8 world units, times `heightScale`. Caustic optical slope stays at plus and minus 0.5 world units |
 
 Do not change `dx`, `dt`, `c`, `damping`, `width`, or `height`. Do not remove the height scale of 8.
 
@@ -86,7 +86,7 @@ UV (0, 0) is world (-200, -200). UV (1, 1) is world (200, 200). The ortho projec
 | Sky | `skyboxVertexShaderSource` | `skyboxFragmentShaderSource` |
 | Overlay | `overlayVertexShaderSource` | `overlayFragmentShaderSource` |
 
-`surfaceVertexShaderSource` samples height with Catmull-Rom and outputs `FragPos` and `Normal`. The slope is that curve at plus and minus 0.5 world units. Water uses it. The floor uses `bottomVertexShaderSource`, which is only the model-view-projection transform. The caustic pass uses `causticVertexShaderSource`.
+`surfaceVertexShaderSource` samples height with Catmull-Rom and outputs `FragPos` and `Normal`. The visible slope is that curve at plus and minus 8 world units. Water uses it. The caustic slope stays at plus and minus 0.5 world units. The floor uses `bottomVertexShaderSource`, which is only the model-view-projection transform. The caustic pass uses `causticVertexShaderSource`.
 
 `main` compiles the caustic program from `causticVertexShaderSource` and `causticsFragmentShaderSource`. It compiles the blur program from `causticBlurVertexShaderSource` and `causticBlurFragmentShaderSource`. The floor uses `bottomVertexShaderSource` and `bottomFragmentShaderSource`. The floor fetches the blurred map once.
 
@@ -121,7 +121,7 @@ Camera for the beauty pass stays `lookAt((90, -120, 95), (0, 0, -10), (0, 0, 1))
 
 ## Caustic vertex shader
 
-The mesh stores world xy. The shader samples `heightTex` with Catmull-Rom. The optical normal is `normalize(vec3(-dhdx, -dhdy, 1))` from that curve at plus and minus 0.5 world units. The visible water normal multiplies that slope by `heightScale`. The Jacobian step is `meshSpacing`.
+The mesh stores world xy. The shader samples `heightTex` with Catmull-Rom. The optical normal is `normalize(vec3(-dhdx, -dhdy, 1))` from that curve at plus and minus 0.5 world units. The visible water normal uses the same curve at plus and minus 8 world units, then multiplies that slope by `heightScale`. The Jacobian step is `meshSpacing`.
 
 The ray starts at the simulated height, not the exaggerated mesh height. `gl_Position` is the floor hit. Intensity is a smooth varying.
 
