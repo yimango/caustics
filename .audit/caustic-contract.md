@@ -6,7 +6,7 @@ Reference for `main.cpp` and `shaders.h`. The pool, the wave step, and this map 
 
 The caustic pass projects each water vertex to the floor along the refracted ray, then writes flux from how much water surface lands on each floor pixel. `shaders.h` owns that pair of shaders. `main.cpp` owns the ortho camera, the additive framebuffer, and the uploads.
 
-The previous fragment shader kept `gl_Position` on the water surface and stored `length(T.xy)`. That paints a soft blob under the wave. `frame-curvature.png` is that result. A vertex bend without the area ratio was reverted because `frame-final.png` looked worse than `frame-400.png`.
+The previous fragment shader kept `gl_Position` on the water surface and stored `length(T.xy)`. That paints a soft blob under the wave. A vertex bend without the area ratio was reverted because it looked worse than the area-ratio rings.
 
 Rejected alternative. Write `1/|det d(hit)/d(x,y)|` into the texel under the surface point. The energy is then still in the wrong place.
 
@@ -23,7 +23,7 @@ Rejected alternative. Write `1/|det d(hit)/d(x,y)|` into the texel under the sur
 | `CAUSTICS_RES` | 2048 |
 | Light position | (0, 0, 100) |
 | Mesh height | `height_current * 8` |
-| Mesh slope | `getSurfaceNormal` already multiplies the height difference by 8 |
+| Mesh slope | one-texel central difference of `heightTex`; the visible normal multiplies that slope by 8 |
 
 Do not change `dx`, `dt`, `c`, `damping`, `width`, or `height`. Do not remove the height scale of 8.
 
@@ -50,9 +50,7 @@ std::vector<float> height_next;
 
 ## Mesh
 
-`buildWaterIndices` runs once. Vertex id is `x * height + y`, the same index as the height arrays. Two triangles per cell, same winding as today.
-
-`fillWaterVertices` runs every frame. It writes position and normal only, then `glBufferSubData` on the vertex buffer. The element buffer is `GL_STATIC_DRAW` once.
+`buildWaterMesh` runs once. Vertex id is `x * height + y`, the same index as the height arrays. The buffer stores world xy and z = 0. Two triangles per cell. Both buffers are `GL_STATIC_DRAW`. The shader samples height and slope from `heightTex`.
 
 ## Framebuffer and UV
 
@@ -72,7 +70,7 @@ Floor sample, unchanged:
 
 ```
 causticsUV = (FragPos.xy + vec2(poolExtent)) / (poolExtent * 2.0)
-causticIntensity = texture(causticsTexture, causticsUV).a
+causticIntensity = texture(causticsTexture, causticsUV).r
 ```
 
 UV (0, 0) is world (-200, -200). UV (1, 1) is world (200, 200). The ortho projection uses the same square, so a floor hit and a floor sample name the same texel.
@@ -82,12 +80,12 @@ UV (0, 0) is world (-200, -200). UV (1, 1) is world (200, 200). The ortho projec
 | Program | Vertex | Fragment |
 | --- | --- | --- |
 | Water | `surfaceVertexShaderSource` | `waterFragmentShaderSource` |
-| Floor | `surfaceVertexShaderSource` | `bottomFragmentShaderSource` |
+| Floor | `bottomVertexShaderSource` | `bottomFragmentShaderSource` |
 | Caustics | `causticVertexShaderSource` | `causticsFragmentShaderSource` |
 | Sky | `skyboxVertexShaderSource` | `skyboxFragmentShaderSource` |
 | Overlay | `overlayVertexShaderSource` | `overlayFragmentShaderSource` |
 
-`surfaceVertexShaderSource` is only the model-view-projection transform. It outputs `FragPos` and `Normal`. Water and the floor use it. The caustic pass does not.
+`surfaceVertexShaderSource` samples `heightTex` and outputs `FragPos` and `Normal`. The slope is a one-texel central difference. Water uses it. The floor uses `bottomVertexShaderSource`, which is only the model-view-projection transform. The caustic pass uses `causticVertexShaderSource`.
 
 `main` compiles the caustic program from `causticVertexShaderSource` and `causticsFragmentShaderSource`. The floor uses `bottomVertexShaderSource`.
 
@@ -112,7 +110,7 @@ UV (0, 0) is world (-200, -200). UV (1, 1) is world (200, 200). The ortho projec
 Beauty pass uploads:
 
 - Floor reads `model`, `view`, `projection`, `causticsTexture` on texture unit 0, `poolExtent`, and `bottomZ`.
-- Water reads `model`, `view`, `projection`, `lightPos`, `viewPos`.
+- Water reads `model`, `view`, `projection`, `lightPos`, `viewPos`, `heightScale`, `poolExtent`, `gridSize`, and `heightTex` on texture unit 1.
 - Sky reads `view` with translation removed, and `projection`.
 
 Camera for the beauty pass stays `lookAt((90, -120, 95), (0, 0, -10), (0, 0, 1))`, perspective 50 degrees, aspect `SCR_WIDTH / SCR_HEIGHT`, near 0.1, far 800.
@@ -149,8 +147,6 @@ FragColor = vec4(clamp(color, 0.0, 1.0), 1.0)
 Four walls share the floor mesh and the floor program. Wall z runs from `BOTTOM_Z` to 18. When `FragPos.z` is above `bottomZ + 0.5`, the fragment shades a stone band and does not sample caustics. The sky gradient is still drawn first, with depth off, as the background. This GLAD has no `glDepthFunc`.
 
 Water stays a Fresnel mix of `vec3(0.03, 0.28, 0.36)` and `vec3(0.40, 0.66, 0.78)`, specular power 48, alpha from 0.28 to 0.52. The floor must stay visible through it.
-
-Drop `time` from every shader that still declares it.
 
 ## Click
 

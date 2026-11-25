@@ -68,4 +68,4 @@ Last confirmed green against the working tree that uses `width = height = 400`. 
 
 ## Not covered
 
-Shaders, the framebuffer pass, refraction, mouse-to-grid mapping, and mesh height exaggeration (`* 8.0f` in `generateWaterMesh`) are not run. Horizons past 200 steps on the 4×4 grid and past 500 steps on the pool are not checked. Rim clicks are rejected by `add_disturbance` and are not part of this check.
+Shaders, the framebuffer pass, refraction, mouse-to-grid mapping, and mesh height exaggeration (`heightScale` 8 in the vertex shader) are not run. Horizons past 200 steps on the 4×4 grid and past 500 steps on the pool are not checked. Rim clicks are rejected by `add_disturbance` and are not part of this check.
