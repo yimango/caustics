@@ -3,6 +3,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <cmath>
+#include <cstdio>
 #include <glad/glad.h>
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -87,6 +89,82 @@ glm::mat4 beautyProjection(1.0f);
 
 const char* dumpPath = nullptr;
 int dumpFrameCount = -1;
+
+struct BaseDisturbance {
+    float amplitude;
+    float wavelength;
+    float tempo;
+};
+
+struct Slider {
+    const char* label;
+    float minValue;
+    float maxValue;
+    float* value;
+};
+
+BaseDisturbance baseDisturbance = {0.01f, 40.0f, 0.05f};
+
+Slider sliders[] = {
+    {"AMP", 0.0f, 0.04f, &baseDisturbance.amplitude},
+    {"SCALE", 16.0f, 80.0f, &baseDisturbance.wavelength},
+    {"TEMPO", 0.0f, 0.20f, &baseDisturbance.tempo},
+};
+
+const int kSliderCount = 3;
+const float kPanelX = 16.0f;
+const float kPanelW = 300.0f;
+const float kPanelPad = 8.0f;
+const float kRowH = 32.0f;
+const float kGlyphScale = 3.0f;
+const float kLabelColumn = 96.0f;
+const float kValueColumn = 96.0f;
+
+int sliderDrag = -1;
+bool leftButtonDown = false;
+int dropGridX = 0;
+int dropGridY = 0;
+float dropAmplitude = 0.0f;
+int dropFrame = -1;
+
+unsigned int overlayVAO = 0;
+unsigned int overlayVBO = 0;
+unsigned int overlayShaderProgram = 0;
+int overlayColorLoc = -1;
+int overlayAlphaLoc = -1;
+int overlayViewportLoc = -1;
+
+struct Glyph {
+    char code;
+    unsigned char rows[7];
+};
+
+const Glyph glyphs[] = {
+    {' ', {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}},
+    {'0', {0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E}},
+    {'1', {0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E}},
+    {'2', {0x0E, 0x11, 0x01, 0x06, 0x08, 0x10, 0x1F}},
+    {'3', {0x1E, 0x01, 0x01, 0x0E, 0x01, 0x01, 0x1E}},
+    {'4', {0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02}},
+    {'5', {0x1F, 0x10, 0x1E, 0x01, 0x01, 0x11, 0x0E}},
+    {'6', {0x0E, 0x10, 0x1E, 0x11, 0x11, 0x11, 0x0E}},
+    {'7', {0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08}},
+    {'8', {0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E}},
+    {'9', {0x0E, 0x11, 0x11, 0x0F, 0x01, 0x01, 0x0E}},
+    {'.', {0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x06}},
+    {'-', {0x00, 0x00, 0x00, 0x1F, 0x00, 0x00, 0x00}},
+    {'A', {0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11}},
+    {'C', {0x0E, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0E}},
+    {'E', {0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F}},
+    {'L', {0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1F}},
+    {'M', {0x11, 0x1B, 0x15, 0x11, 0x11, 0x11, 0x11}},
+    {'O', {0x0E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E}},
+    {'P', {0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10}},
+    {'S', {0x0F, 0x10, 0x10, 0x0E, 0x01, 0x01, 0x1E}},
+    {'T', {0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04}},
+};
+
+const int glyphCount = (int)(sizeof(glyphs) / sizeof(glyphs[0]));
 
 void update_wave() {
     for (int x = 1; x < width - 1; ++x) {
@@ -178,15 +256,80 @@ void processInput(GLFWwindow* win) {
     }
 }
 
-void mouse_button_callback(GLFWwindow* win, int button, int action, int) {
-    if (button != GLFW_MOUSE_BUTTON_LEFT || action != GLFW_PRESS) {
-        return;
+void apply_base_disturbance(int frame) {
+    float k = 6.2831853f / baseDisturbance.wavelength;
+    float envelope = std::cos((float)frame * baseDisturbance.tempo);
+    for (int x = 1; x < width - 1; ++x) {
+        for (int y = 1; y < height - 1; ++y) {
+            height_current[x * height + y] += baseDisturbance.amplitude * std::sin(x * k + y * k * 0.37f) * envelope;
+        }
     }
+}
 
+float panelTopY() {
+    return (float)SCR_HEIGHT - 12.0f;
+}
+
+float panelHeight() {
+    return kPanelPad * 2.0f + kRowH * (float)kSliderCount;
+}
+
+float panelBottomY() {
+    return panelTopY() - panelHeight();
+}
+
+float rowBottomY(int index) {
+    return panelTopY() - kPanelPad - kRowH * (float)(index + 1);
+}
+
+float sliderTrackX() {
+    return kPanelX + kPanelPad + kLabelColumn;
+}
+
+float sliderValueX() {
+    return kPanelX + kPanelW - kPanelPad - kValueColumn;
+}
+
+float sliderTrackW() {
+    return sliderValueX() - 8.0f - sliderTrackX();
+}
+
+int sliderRowAt(float x, float y) {
+    if (x < kPanelX || x >= kPanelX + kPanelW || y < panelBottomY() || y >= panelTopY()) {
+        return -1;
+    }
+    for (int i = 0; i < kSliderCount; ++i) {
+        float bottom = rowBottomY(i);
+        if (y >= bottom && y < bottom + kRowH) {
+            return i;
+        }
+    }
+    if (y >= panelTopY() - kPanelPad) {
+        return 0;
+    }
+    return kSliderCount - 1;
+}
+
+void writeSliderAt(int index, float cursorX) {
+    float span = sliderTrackW();
+    float t = 0.0f;
+    if (span > 0.0f) {
+        t = (cursorX - sliderTrackX()) / span;
+    }
+    if (t < 0.0f) {
+        t = 0.0f;
+    }
+    if (t > 1.0f) {
+        t = 1.0f;
+    }
+    Slider* slider = &sliders[index];
+    *slider->value = slider->minValue + t * (slider->maxValue - slider->minValue);
+}
+
+bool readCursor(GLFWwindow* win, float* fbX, float* fbY, float* viewX, float* viewY, int* outFbW, int* outFbH) {
     double xpos = 0.0;
     double ypos = 0.0;
     glfwGetCursorPos(win, &xpos, &ypos);
-
     int fbW = 0;
     int fbH = 0;
     glfwGetFramebufferSize(win, &fbW, &fbH);
@@ -194,23 +337,182 @@ void mouse_button_callback(GLFWwindow* win, int button, int action, int) {
     int winH = 0;
     glfwGetWindowSize(win, &winW, &winH);
     if (fbW <= 0 || fbH <= 0 || winW <= 0 || winH <= 0) {
+        return false;
+    }
+    float cursorX = (float)xpos * (float)fbW / (float)winW;
+    float cursorY = (float)fbH - (float)ypos * (float)fbH / (float)winH;
+    *fbX = cursorX;
+    *fbY = cursorY;
+    *viewX = cursorX * (float)SCR_WIDTH / (float)fbW;
+    *viewY = cursorY * (float)SCR_HEIGHT / (float)fbH;
+    *outFbW = fbW;
+    *outFbH = fbH;
+    return true;
+}
+
+void trackSliderDrag() {
+    if (!leftButtonDown || sliderDrag < 0) {
+        return;
+    }
+    float fbX = 0.0f;
+    float fbY = 0.0f;
+    float viewX = 0.0f;
+    float viewY = 0.0f;
+    int fbW = 0;
+    int fbH = 0;
+    if (!readCursor(window, &fbX, &fbY, &viewX, &viewY, &fbW, &fbH)) {
+        return;
+    }
+    writeSliderAt(sliderDrag, viewX);
+}
+
+const unsigned char* findGlyph(char code) {
+    for (int i = 0; i < glyphCount; ++i) {
+        if (glyphs[i].code == code) {
+            return glyphs[i].rows;
+        }
+    }
+    return glyphs[0].rows;
+}
+
+void initOverlayMesh() {
+    glGenVertexArrays(1, &overlayVAO);
+    glGenBuffers(1, &overlayVBO);
+    glBindVertexArray(overlayVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, overlayVBO);
+    glBufferData(GL_ARRAY_BUFFER, 12 * (GLsizeiptr)sizeof(float), nullptr, GL_DYNAMIC_DRAW);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+}
+
+void drawOverlayRect(float x, float y, float w, float h, float r, float g, float b, float a) {
+    float verts[12] = {
+        x, y,
+        x + w, y,
+        x + w, y + h,
+        x, y,
+        x + w, y + h,
+        x, y + h
+    };
+    glBindBuffer(GL_ARRAY_BUFFER, overlayVBO);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(verts), verts);
+    float color[3] = {r, g, b};
+    glUniform3fv(overlayColorLoc, 1, color);
+    glUniform1f(overlayAlphaLoc, a);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+}
+
+void drawGlyph(char code, float x, float y, float scale, float r, float g, float b) {
+    const unsigned char* rows = findGlyph(code);
+    for (int row = 0; row < 7; ++row) {
+        unsigned char bits = rows[row];
+        for (int col = 0; col < 5; ++col) {
+            if ((bits & (unsigned char)(0x10 >> col)) == 0) {
+                continue;
+            }
+            drawOverlayRect(x + (float)col * scale, y + (float)(6 - row) * scale, scale, scale, r, g, b, 1.0f);
+        }
+    }
+}
+
+void drawText(const char* text, float x, float y, float scale, float r, float g, float b) {
+    float pen = x;
+    for (int i = 0; text[i] != '\0'; ++i) {
+        drawGlyph(text[i], pen, y, scale, r, g, b);
+        pen += 6.0f * scale;
+    }
+}
+
+void drawSliders() {
+    glDisable(GL_DEPTH_TEST);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glUseProgram(overlayShaderProgram);
+    float viewportPx[2] = {(float)SCR_WIDTH, (float)SCR_HEIGHT};
+    glUniform2fv(overlayViewportLoc, 1, viewportPx);
+    glBindVertexArray(overlayVAO);
+    drawOverlayRect(kPanelX, panelBottomY(), kPanelW, panelHeight(), 0.06f, 0.08f, 0.09f, 0.82f);
+    for (int i = 0; i < kSliderCount; ++i) {
+        float bottom = rowBottomY(i);
+        float glyphY = bottom + (kRowH - 7.0f * kGlyphScale) * 0.5f;
+        drawText(sliders[i].label, kPanelX + kPanelPad, glyphY, kGlyphScale, 0.86f, 0.90f, 0.88f);
+        float trackX = sliderTrackX();
+        float trackW = sliderTrackW();
+        float trackH = 6.0f;
+        float trackY = bottom + (kRowH - trackH) * 0.5f;
+        drawOverlayRect(trackX, trackY, trackW, trackH, 0.18f, 0.22f, 0.24f, 1.0f);
+        float minValue = sliders[i].minValue;
+        float maxValue = sliders[i].maxValue;
+        float t = 0.0f;
+        if (maxValue > minValue) {
+            t = (*sliders[i].value - minValue) / (maxValue - minValue);
+        }
+        if (t < 0.0f) {
+            t = 0.0f;
+        }
+        if (t > 1.0f) {
+            t = 1.0f;
+        }
+        drawOverlayRect(trackX, trackY, trackW * t, trackH, 0.45f, 0.66f, 0.60f, 1.0f);
+        float thumbW = 8.0f;
+        float thumbH = 18.0f;
+        float thumbX = trackX + trackW * t - thumbW * 0.5f;
+        float thumbY = bottom + (kRowH - thumbH) * 0.5f;
+        drawOverlayRect(thumbX, thumbY, thumbW, thumbH, 0.93f, 0.95f, 0.92f, 1.0f);
+        char valueText[16];
+        const char* format = "%.3f";
+        if (sliders[i].value == &baseDisturbance.wavelength) {
+            format = "%.1f";
+        }
+        std::snprintf(valueText, sizeof(valueText), format, *sliders[i].value);
+        drawText(valueText, sliderValueX(), glyphY, kGlyphScale, 0.86f, 0.90f, 0.88f);
+    }
+    glDisable(GL_BLEND);
+    glEnable(GL_DEPTH_TEST);
+}
+
+void mouse_button_callback(GLFWwindow* win, int button, int action, int) {
+    if (button != GLFW_MOUSE_BUTTON_LEFT) {
+        return;
+    }
+    if (action == GLFW_RELEASE) {
+        leftButtonDown = false;
+        sliderDrag = -1;
+        return;
+    }
+    if (action != GLFW_PRESS) {
+        return;
+    }
+    leftButtonDown = true;
+
+    float fbX = 0.0f;
+    float fbY = 0.0f;
+    float viewX = 0.0f;
+    float viewY = 0.0f;
+    int fbW = 0;
+    int fbH = 0;
+    if (!readCursor(win, &fbX, &fbY, &viewX, &viewY, &fbW, &fbH)) {
+        return;
+    }
+    int row = sliderRowAt(viewX, viewY);
+    if (row >= 0) {
+        sliderDrag = row;
+        writeSliderAt(row, viewX);
         return;
     }
 
-    float cursorX = (float)xpos * (float)fbW / (float)winW;
-    float cursorY = (float)fbH - (float)ypos * (float)fbH / (float)winH;
     glm::vec4 viewport(0.0f, 0.0f, (float)fbW, (float)fbH);
-    glm::vec3 nearPoint = glm::unProject(glm::vec3(cursorX, cursorY, 0.0f), beautyView, beautyProjection, viewport);
-    glm::vec3 farPoint = glm::unProject(glm::vec3(cursorX, cursorY, 1.0f), beautyView, beautyProjection, viewport);
+    glm::vec3 nearPoint = glm::unProject(glm::vec3(fbX, fbY, 0.0f), beautyView, beautyProjection, viewport);
+    glm::vec3 farPoint = glm::unProject(glm::vec3(fbX, fbY, 1.0f), beautyView, beautyProjection, viewport);
     glm::vec3 ray = farPoint - nearPoint;
     if (ray.z == 0.0f) {
         return;
     }
-    float t = -nearPoint.z / ray.z;
-    if (t < 0.0f) {
+    float travel = -nearPoint.z / ray.z;
+    if (travel < 0.0f) {
         return;
     }
-    glm::vec3 hit = nearPoint + ray * t;
+    glm::vec3 hit = nearPoint + ray * travel;
     int gridX = (int)(hit.x / waterScale + width / 2);
     int gridY = (int)(hit.y / waterScale + height / 2);
     if (gridX >= 0 && gridX < width && gridY >= 0 && gridY < height) {
@@ -539,6 +841,12 @@ int renderLoop() {
 
     while (!glfwWindowShouldClose(window)) {
         processInput(window);
+        trackSliderDrag();
+        if (dropFrame >= 0 && shown == dropFrame) {
+            add_disturbance(dropGridX, dropGridY, dropAmplitude);
+            dropFrame = -1;
+        }
+        apply_base_disturbance(shown);
 
         update_wave();
         uploadHeightTexture();
@@ -622,6 +930,8 @@ int renderLoop() {
         glDrawElements(GL_TRIANGLES, (GLsizei)waterIndices.size(), GL_UNSIGNED_INT, 0);
         glDisable(GL_BLEND);
 
+        drawSliders();
+
         bool dumpNow = dumpPath != nullptr && shown + 1 >= dumpFrameCount;
         if (dumpNow && !captureWindowBmp(dumpPath)) {
             exitCode = 1;
@@ -642,9 +952,18 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--dump") == 0 && i + 1 < argc) {
             dumpPath = argv[++i];
-            if (i + 1 < argc) {
+            if (i + 1 < argc && argv[i + 1][0] != '-') {
                 dumpFrameCount = std::atoi(argv[++i]);
             }
+        } else if (std::strcmp(argv[i], "--wind") == 0 && i + 3 < argc) {
+            baseDisturbance.amplitude = (float)std::atof(argv[++i]);
+            baseDisturbance.wavelength = (float)std::atof(argv[++i]);
+            baseDisturbance.tempo = (float)std::atof(argv[++i]);
+        } else if (std::strcmp(argv[i], "--drop") == 0 && i + 4 < argc) {
+            dropGridX = std::atoi(argv[++i]);
+            dropGridY = std::atoi(argv[++i]);
+            dropAmplitude = (float)std::atof(argv[++i]);
+            dropFrame = std::atoi(argv[++i]);
         }
     }
     if (dumpPath != nullptr && dumpFrameCount < 0) {
@@ -659,15 +978,17 @@ int main(int argc, char** argv) {
     skyboxShaderProgram = createShaderProgram(skyboxVertexShaderSource, skyboxFragmentShaderSource);
     causticsShaderProgram = createShaderProgram(causticVertexShaderSource, causticsFragmentShaderSource);
     bottomShaderProgram = createShaderProgram(bottomVertexShaderSource, bottomFragmentShaderSource);
+    overlayShaderProgram = createShaderProgram(overlayVertexShaderSource, overlayFragmentShaderSource);
+    overlayColorLoc = glGetUniformLocation(overlayShaderProgram, "color");
+    overlayAlphaLoc = glGetUniformLocation(overlayShaderProgram, "alpha");
+    overlayViewportLoc = glGetUniformLocation(overlayShaderProgram, "viewport");
 
     init_grid();
-    add_disturbance(100, 100, 2.0f);
-    add_disturbance(300, 300, 1.5f);
-    add_disturbance(150, 250, 1.8f);
 
     buildWaterMesh();
     generateBottomMesh();
     generateSkyboxMesh();
+    initOverlayMesh();
 
     glEnable(GL_DEPTH_TEST);
     setupCausticsFBO();
@@ -690,6 +1011,9 @@ int main(int argc, char** argv) {
     glDeleteProgram(skyboxShaderProgram);
     glDeleteProgram(causticsShaderProgram);
     glDeleteProgram(bottomShaderProgram);
+    glDeleteVertexArrays(1, &overlayVAO);
+    glDeleteBuffers(1, &overlayVBO);
+    glDeleteProgram(overlayShaderProgram);
 
     glfwTerminate();
     return exitCode;

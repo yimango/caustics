@@ -85,6 +85,7 @@ UV (0, 0) is world (-200, -200). UV (1, 1) is world (200, 200). The ortho projec
 | Floor | `surfaceVertexShaderSource` | `bottomFragmentShaderSource` |
 | Caustics | `causticVertexShaderSource` | `causticsFragmentShaderSource` |
 | Sky | `skyboxVertexShaderSource` | `skyboxFragmentShaderSource` |
+| Overlay | `overlayVertexShaderSource` | `overlayFragmentShaderSource` |
 
 `surfaceVertexShaderSource` is only the model-view-projection transform. It outputs `FragPos` and `Normal`. Water and the floor use it. The caustic pass does not.
 
@@ -108,9 +109,9 @@ UV (0, 0) is world (-200, -200). UV (1, 1) is world (200, 200). The ortho projec
 
 `main` uploads `heightScale`, `poolExtent`, `gridSize`, and `heightTex` on texture unit 1. `poolExtent` is `(width / 2) * waterScale`. The height texture is R32F, one float per cell, updated with `glTexSubImage2D` after each wave step. There is no geometry shader, no `time` uniform, and no `receiverTexel` uniform.
 
-Beauty pass uploads, unchanged except dropping `time`:
+Beauty pass uploads:
 
-- Floor reads `model`, `view`, `projection`, `causticsTexture` on texture unit 0.
+- Floor reads `model`, `view`, `projection`, `causticsTexture` on texture unit 0, `poolExtent`, and `bottomZ`.
 - Water reads `model`, `view`, `projection`, `lightPos`, `viewPos`.
 - Sky reads `view` with translation removed, and `projection`.
 
@@ -137,30 +138,30 @@ FragColor = vec4(intensity)
 
 ## Floor and water
 
-Floor, so filaments read on a dark pool:
+Floor tiles are 25 world units. Tile A is `vec3(0.62, 0.70, 0.66)`. Tile B is `vec3(0.33, 0.50, 0.52)`. Grout is `vec3(0.16, 0.22, 0.24)`, about 0.06 of the tile. The 5-tap sample is tonemapped before it multiplies the tile.
 
 ```
-light = causticIntensity
-floorColor = vec3(0.05, 0.14, 0.20)
-lit = floorColor * (0.25 + light)
-hot = vec3(1.45, 1.15, 0.62) * max(light - 1.0, 0.0)
-FragColor = vec4(clamp(lit + hot, 0.0, 1.0), 1.0)
+tone = light / (1.0 + 0.85 * max(light - 0.65, 0.0))
+color = albedo * (0.42 + 1.15 * tone)
+FragColor = vec4(clamp(color, 0.0, 1.0), 1.0)
 ```
 
-Water stays a Fresnel mix of `vec3(0.03, 0.28, 0.36)` and `vec3(0.40, 0.66, 0.78)`, specular power 48, alpha from 0.28 to 0.52. The floor must stay visible through it. Sky stays the two-stop gradient and is drawn first, with depth off. This GLAD has no `glDepthFunc`.
+Four walls share the floor mesh and the floor program. Wall z runs from `BOTTOM_Z` to 18. When `FragPos.z` is above `bottomZ + 0.5`, the fragment shades a stone band and does not sample caustics. The sky gradient is still drawn first, with depth off, as the background. This GLAD has no `glDepthFunc`.
+
+Water stays a Fresnel mix of `vec3(0.03, 0.28, 0.36)` and `vec3(0.40, 0.66, 0.78)`, specular power 48, alpha from 0.28 to 0.52. The floor must stay visible through it.
 
 Drop `time` from every shader that still declares it.
 
 ## Click
 
-A left click unprojects the cursor with the beauty camera and the framebuffer size, hits the plane `z = 0`, then
+A left click outside the slider panel unprojects the cursor with the beauty camera and the framebuffer size, hits the plane `z = 0`, then
 
 ```
 gridX = hit.x / waterScale + width / 2
 gridY = hit.y / waterScale + height / 2
 ```
 
-`add_disturbance(gridX, gridY, 5.0)` when the indices are inside the grid. Escape still closes the window.
+`add_disturbance(gridX, gridY, 5.0)` when the indices are inside the grid. A click on the panel drags a slider and does not add a drop. Escape still closes the window.
 
 ## Dump
 

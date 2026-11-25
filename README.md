@@ -1,6 +1,6 @@
 # Water caustics
 
-The water grid is 400 by 400. Left click adds a wave. Escape closes the window.
+The water grid is 400 by 400. The AMP, SCALE, and TEMPO sliders drive the ongoing wind. A click outside the panel adds a drop. Escape closes the window.
 
 Caustics are a refraction map. `shaders.h` holds the shaders. The caustic pass sends each water vertex to the pool floor along the refracted ray. The fragment writes how much surface lands on each floor pixel.
 
