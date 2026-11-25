@@ -83,12 +83,12 @@ UV (0, 0) is world (-200, -200). UV (1, 1) is world (200, 200). The ortho projec
 | --- | --- | --- |
 | Water | `surfaceVertexShaderSource` | `waterFragmentShaderSource` |
 | Floor | `surfaceVertexShaderSource` | `bottomFragmentShaderSource` |
-| Caustics | `causticVertexShaderSource` plus `causticGeometryShaderSource` | `causticsFragmentShaderSource` |
+| Caustics | `causticVertexShaderSource` | `causticsFragmentShaderSource` |
 | Sky | `skyboxVertexShaderSource` | `skyboxFragmentShaderSource` |
 
 `surfaceVertexShaderSource` is only the model-view-projection transform. It outputs `FragPos` and `Normal`. Water and the floor use it. The caustic pass does not.
 
-`main` compiles the caustic program from `causticVertexShaderSource`, `causticGeometryShaderSource`, and `causticsFragmentShaderSource`.
+`main` compiles the caustic program from `causticVertexShaderSource` and `causticsFragmentShaderSource`. The floor uses `bottomVertexShaderSource`.
 
 ## Caustic uniforms
 
@@ -106,7 +106,7 @@ UV (0, 0) is world (-200, -200). UV (1, 1) is world (200, 200). The ortho projec
 | `heightScale` | float | `meshHeightScale` (8) |
 | `poolExtent` | float | `(width / 2) * waterScale` |
 
-`main` uploads `heightScale` as `meshHeightScale` (8) and `poolExtent` as `(width / 2) * waterScale`. The geometry shader and the floor shader read `poolExtent`. The vertex shader divides the exaggerated height by `heightScale`. There is no `time` uniform and no `receiverTexel` uniform.
+`main` uploads `heightScale`, `poolExtent`, `gridSize`, and `heightTex` on texture unit 1. `poolExtent` is `(width / 2) * waterScale`. The height texture is R32F, one float per cell, updated with `glTexSubImage2D` after each wave step. There is no geometry shader, no `time` uniform, and no `receiverTexel` uniform.
 
 Beauty pass uploads, unchanged except dropping `time`:
 
@@ -118,39 +118,22 @@ Camera for the beauty pass stays `lookAt((90, -120, 95), (0, 0, -10), (0, 0, 1))
 
 ## Caustic vertex shader
 
-Inputs are `aPos` and `aNormal`. Outputs are `FragPos` (surface position in world space), `Normal`, and `float casts`.
+The mesh stores world xy. The shader samples `heightTex`. The optical normal is `normalize(vec3(-dhdx, -dhdy, 1))` from one-texel neighbors. The visible water normal multiplies that slope by `heightScale`.
 
-1. `P = (model * vec4(aPos, 1)).xyz`
-2. `N = normalize(normalMatrix * aNormal)`. If `N.z < 0`, negate `N`.
-3. The mesh slope uses `meshHeightScale`. The ray uses `optical = normalize(N.xy / N.z, 1)` and `origin = (P.xy, P.z / heightScale)`.
-4. `I = normalize(origin - lightPos)`
-5. `eta = airIOR / max(waterIOR, 0.001)`
-6. `T = refract(I, optical, eta)`
-7. If `T.z < -0.02`, `t = (bottomZ - origin.z) / T.z`. If `t > 0`, `hit = origin + T * t` and `casts = 1`.
-8. If `casts < 0.5`, set `gl_Position` to `vec4(2, 2, 2, 1)` so the triangle is clipped.
-9. Otherwise `gl_Position = projection * view * vec4(hit, 1)`.
-
-`FragPos` stays `P`. Do not write the hit into `FragPos`.
-
-## Caustic geometry shader
-
-`causticGeometryShaderSource` drops a triangle when any vertex has `casts < 0.5`. Otherwise it sets one flat intensity for the whole triangle.
+The ray starts at the simulated height, not the exaggerated mesh height. `gl_Position` is the floor hit. Intensity is a smooth varying.
 
 ```
-source = abs(cross(FragPos[1].xy - FragPos[0].xy, FragPos[2].xy - FragPos[0].xy))
-receiver = abs(cross(hit1.xy - hit0.xy, hit2.xy - hit0.xy))
-intensity = clamp(source / max(receiver, 0.0001), 0.0, 6.0)
+receiver = abs(cross(hit(x+dx) - hit, hit(y+dy) - hit))
+intensity = clamp(dx * dy / max(receiver, 0.0001), 0.0, 4.0)
 ```
 
-Hit positions come from clip space times `poolExtent`. On flat water, `intensity` is about 1. Where the surface triangle lands on a smaller floor triangle, `intensity` rises. The cap is 6. The geometry shader drops a triangle when any vertex has `casts < 0.5`, so the vertex shader does not park missed rays off screen.
+On flat water, intensity is about 1. Where neighboring rays land closer together, intensity rises. The floor reads the red channel through a 5-tap cross so a one-pixel ridge stays visible without turning into a blob.
 
 ## Caustic fragment shader
 
 ```
-FragColor = vec4(vIntensity)
+FragColor = vec4(intensity)
 ```
-
-The floor reads alpha, which matches the red channel. A per-pixel derivative was tried first. It painted the triangle edges, so the area ratio lives in the geometry shader.
 
 ## Floor and water
 
