@@ -82,6 +82,8 @@ unsigned int bottomShaderProgram;
 int framebufferWidth = (int)SCR_WIDTH;
 int framebufferHeight = (int)SCR_HEIGHT;
 
+int axisX = 0;
+int axisY = 0;
 std::vector<unsigned int> waterIndices;
 
 glm::mat4 beautyView(1.0f);
@@ -202,23 +204,29 @@ void init_grid() {
 }
 
 void buildWaterMesh() {
-    std::vector<float> vertices(static_cast<size_t>(width) * static_cast<size_t>(height) * 3);
+    const int meshSubdiv = 2;
+    axisX = (width - 1) * meshSubdiv + 1;
+    axisY = (height - 1) * meshSubdiv + 1;
+
+    std::vector<float> vertices(static_cast<size_t>(axisX) * static_cast<size_t>(axisY) * 3);
     size_t v = 0;
-    for (int x = 0; x < width; ++x) {
-        for (int y = 0; y < height; ++y) {
-            vertices[v++] = (x - width / 2.0f) * waterScale;
-            vertices[v++] = (y - height / 2.0f) * waterScale;
+    for (int i = 0; i < axisX; ++i) {
+        float gx = static_cast<float>(i) * static_cast<float>(width - 1) / static_cast<float>(axisX - 1);
+        for (int j = 0; j < axisY; ++j) {
+            float gy = static_cast<float>(j) * static_cast<float>(height - 1) / static_cast<float>(axisY - 1);
+            vertices[v++] = (gx - width / 2.0f) * waterScale;
+            vertices[v++] = (gy - height / 2.0f) * waterScale;
             vertices[v++] = 0.0f;
         }
     }
 
     waterIndices.clear();
-    waterIndices.reserve(static_cast<size_t>(width - 1) * static_cast<size_t>(height - 1) * 6);
-    for (int x = 0; x < width - 1; ++x) {
-        for (int y = 0; y < height - 1; ++y) {
-            unsigned int topLeft = static_cast<unsigned int>(x * height + y);
+    waterIndices.reserve(static_cast<size_t>(axisX - 1) * static_cast<size_t>(axisY - 1) * 6);
+    for (int i = 0; i < axisX - 1; ++i) {
+        for (int j = 0; j < axisY - 1; ++j) {
+            unsigned int topLeft = static_cast<unsigned int>(i * axisY + j);
             unsigned int topRight = topLeft + 1;
-            unsigned int bottomLeft = static_cast<unsigned int>((x + 1) * height + y);
+            unsigned int bottomLeft = static_cast<unsigned int>((i + 1) * axisY + j);
             unsigned int bottomRight = bottomLeft + 1;
 
             waterIndices.push_back(topLeft);
@@ -886,6 +894,8 @@ int renderLoop() {
         glUniform1f(glGetUniformLocation(causticsShaderProgram, "poolExtent"), extent);
         float gridSizeValue[2] = { (float)width, (float)height };
         glUniform2fv(glGetUniformLocation(causticsShaderProgram, "gridSize"), 1, gridSizeValue);
+        float meshSpacing = ((width - 1) * waterScale) / (axisX - 1);
+        glUniform1f(glGetUniformLocation(causticsShaderProgram, "meshSpacing"), meshSpacing);
         glUniform1i(glGetUniformLocation(causticsShaderProgram, "heightTex"), 1);
 
         glBindVertexArray(waterVAO);

@@ -1,5 +1,61 @@
 #pragma once
 
+#define WAVE_HEIGHT_SAMPLE R"(
+    float catmullRom(float p0, float p1, float p2, float p3, float t) {
+        float t2 = t * t;
+        float t3 = t2 * t;
+        return 0.5 * ((2.0 * p1) +
+            (-p0 + p2) * t +
+            (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2 +
+            (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3);
+    }
+
+    float tapHeight(float xIndex, float yIndex, vec2 lo, vec2 hi) {
+        vec2 tc = vec2((yIndex + 0.5) / gridSize.y, (xIndex + 0.5) / gridSize.x);
+        return texture(heightTex, clamp(tc, lo, hi)).r;
+    }
+
+    float sampleHeight(vec2 xy) {
+        vec2 halfTexel = 0.5 / gridSize;
+        vec2 uv = xy / (poolExtent * 2.0) + 0.5 + halfTexel;
+        vec2 index = uv * gridSize - 0.5;
+        vec2 cell = floor(index);
+        vec2 t = index - cell;
+        vec2 lo = vec2(halfTexel.y, halfTexel.x);
+        vec2 hi = vec2(1.0) - lo;
+        float x0 = cell.x - 1.0;
+        float x1 = cell.x;
+        float x2 = cell.x + 1.0;
+        float x3 = cell.x + 2.0;
+        float y0 = cell.y - 1.0;
+        float y1 = cell.y;
+        float y2 = cell.y + 1.0;
+        float y3 = cell.y + 2.0;
+        float r0 = catmullRom(
+            tapHeight(x0, y0, lo, hi), tapHeight(x1, y0, lo, hi),
+            tapHeight(x2, y0, lo, hi), tapHeight(x3, y0, lo, hi), t.x);
+        float r1 = catmullRom(
+            tapHeight(x0, y1, lo, hi), tapHeight(x1, y1, lo, hi),
+            tapHeight(x2, y1, lo, hi), tapHeight(x3, y1, lo, hi), t.x);
+        float r2 = catmullRom(
+            tapHeight(x0, y2, lo, hi), tapHeight(x1, y2, lo, hi),
+            tapHeight(x2, y2, lo, hi), tapHeight(x3, y2, lo, hi), t.x);
+        float r3 = catmullRom(
+            tapHeight(x0, y3, lo, hi), tapHeight(x1, y3, lo, hi),
+            tapHeight(x2, y3, lo, hi), tapHeight(x3, y3, lo, hi), t.x);
+        return catmullRom(r0, r1, r2, r3, t.y);
+    }
+
+    void heightSlope(vec2 xy, out float dhdx, out float dhdy) {
+        float hxp = sampleHeight(xy + vec2(0.5, 0.0));
+        float hxm = sampleHeight(xy - vec2(0.5, 0.0));
+        float hyp = sampleHeight(xy + vec2(0.0, 0.5));
+        float hym = sampleHeight(xy - vec2(0.0, 0.5));
+        dhdx = (hxp - hxm) / 1.0;
+        dhdy = (hyp - hym) / 1.0;
+    }
+)"
+
 const char* surfaceVertexShaderSource = R"(
     #version 330 core
     layout (location = 0) in vec3 aPos;
@@ -14,32 +70,10 @@ const char* surfaceVertexShaderSource = R"(
     uniform float heightScale;
     uniform float poolExtent;
     uniform vec2 gridSize;
-
-    vec2 heightCoord(vec2 xy) {
-        vec2 halfTexel = 0.5 / gridSize;
-        vec2 uv = clamp(xy / (poolExtent * 2.0) + 0.5 + halfTexel, halfTexel, vec2(1.0) - halfTexel);
-        return vec2(uv.y, uv.x);
-    }
-
-    void heightSlope(vec2 xy, out float dhdx, out float dhdy) {
-        vec2 halfTexel = 0.5 / gridSize;
-        vec2 uv = clamp(xy / (poolExtent * 2.0) + 0.5 + halfTexel, halfTexel, vec2(1.0) - halfTexel);
-        vec2 texel = 1.0 / gridSize;
-        vec2 tc = vec2(uv.y, uv.x);
-        vec2 lo = vec2(halfTexel.y, halfTexel.x);
-        vec2 hi = vec2(1.0) - lo;
-        float hxp = texture(heightTex, clamp(tc + vec2(0.0, texel.x), lo, hi)).r;
-        float hxm = texture(heightTex, clamp(tc - vec2(0.0, texel.x), lo, hi)).r;
-        float hyp = texture(heightTex, clamp(tc + vec2(texel.y, 0.0), lo, hi)).r;
-        float hym = texture(heightTex, clamp(tc - vec2(texel.y, 0.0), lo, hi)).r;
-        float spacing = poolExtent * 2.0 / gridSize.x;
-        dhdx = (hxp - hxm) / (2.0 * spacing);
-        dhdy = (hyp - hym) / (2.0 * spacing);
-    }
-
+)" WAVE_HEIGHT_SAMPLE R"(
     void main() {
         vec2 xy = (model * vec4(aPos, 1.0)).xy;
-        float h = texture(heightTex, heightCoord(xy)).r;
+        float h = sampleHeight(xy);
         float dhdx;
         float dhdy;
         heightSlope(xy, dhdx, dhdy);
@@ -67,33 +101,8 @@ const char* causticVertexShaderSource = R"(
     uniform float poolExtent;
     uniform sampler2D heightTex;
     uniform vec2 gridSize;
-
-    vec2 heightCoord(vec2 xy) {
-        vec2 halfTexel = 0.5 / gridSize;
-        vec2 uv = clamp(xy / (poolExtent * 2.0) + 0.5 + halfTexel, halfTexel, vec2(1.0) - halfTexel);
-        return vec2(uv.y, uv.x);
-    }
-
-    float sampleHeight(vec2 xy) {
-        return texture(heightTex, heightCoord(xy)).r;
-    }
-
-    void heightSlope(vec2 xy, out float dhdx, out float dhdy) {
-        vec2 halfTexel = 0.5 / gridSize;
-        vec2 uv = clamp(xy / (poolExtent * 2.0) + 0.5 + halfTexel, halfTexel, vec2(1.0) - halfTexel);
-        vec2 texel = 1.0 / gridSize;
-        vec2 tc = vec2(uv.y, uv.x);
-        vec2 lo = vec2(halfTexel.y, halfTexel.x);
-        vec2 hi = vec2(1.0) - lo;
-        float hxp = texture(heightTex, clamp(tc + vec2(0.0, texel.x), lo, hi)).r;
-        float hxm = texture(heightTex, clamp(tc - vec2(0.0, texel.x), lo, hi)).r;
-        float hyp = texture(heightTex, clamp(tc + vec2(texel.y, 0.0), lo, hi)).r;
-        float hym = texture(heightTex, clamp(tc - vec2(texel.y, 0.0), lo, hi)).r;
-        float spacing = poolExtent * 2.0 / gridSize.x;
-        dhdx = (hxp - hxm) / (2.0 * spacing);
-        dhdy = (hyp - hym) / (2.0 * spacing);
-    }
-
+    uniform float meshSpacing;
+)" WAVE_HEIGHT_SAMPLE R"(
     bool floorHit(vec2 xy, out vec3 hit) {
         float h = sampleHeight(xy);
         float dhdx;
@@ -125,7 +134,7 @@ const char* causticVertexShaderSource = R"(
         if (floorHit(xy, center)) {
             casts = 1.0;
             hit = center;
-            float spacing = poolExtent * 2.0 / gridSize.x;
+            float spacing = meshSpacing > 0.0 ? meshSpacing : poolExtent * 2.0 / gridSize.x;
             vec3 hitX;
             vec3 hitY;
             if (floorHit(xy + vec2(spacing, 0.0), hitX) && floorHit(xy + vec2(0.0, spacing), hitY)) {
@@ -139,6 +148,8 @@ const char* causticVertexShaderSource = R"(
         gl_Position = projection * view * vec4(hit, 1.0);
     }
 )";
+
+#undef WAVE_HEIGHT_SAMPLE
 
 const char* bottomVertexShaderSource = R"(
     #version 330 core
