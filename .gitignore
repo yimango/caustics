@@ -55,6 +55,12 @@ packages/
 **/bin/
 **/lib-*/
 
+.audit/*.png
+.audit/*.bmp
+.audit/*.tsv
+.audit/*.err
+.audit/*.out
+
 # Logs and temporary files
 *.log
 *.tmp
