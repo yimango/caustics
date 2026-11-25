@@ -886,7 +886,7 @@ unsigned int createShaderProgram(const char* vertexSource, const char* fragmentS
 
 int renderLoop() {
     glm::vec3 lightPos(0.0f, 0.0f, 100.0f);
-    glm::vec3 cameraPos(90.0f, -120.0f, 95.0f);
+    glm::vec3 cameraPos(55.0f, -55.0f, 500.0f);
     int shown = 0;
     int exitCode = 0;
 
@@ -905,7 +905,7 @@ int renderLoop() {
         glClearColor(0.45f, 0.65f, 0.85f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        beautyView = glm::lookAt(cameraPos, glm::vec3(0.0f, 0.0f, -10.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+        beautyView = glm::lookAt(cameraPos, glm::vec3(0.0f, 0.0f, -30.0f), glm::vec3(0.0f, 1.0f, 0.0f));
         beautyProjection = glm::perspective(glm::radians(50.0f), (float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f, 800.0f);
         glm::mat4 model(1.0f);
 
