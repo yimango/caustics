@@ -38,6 +38,7 @@ float dt = 0.7f;
 float c = 1.0f;
 float damping = 0.01f;
 float waterScale = 1.0f;
+const float meshHeightScale = 8.0f;
 
 std::vector<float> height_current;
 std::vector<float> height_prev;
@@ -109,8 +110,8 @@ void init_grid() {
 }
 
 glm::vec3 getSurfaceNormal(int x, int y) {
-    float ddx = (height_current[(x + 1) * height + y] - height_current[(x - 1) * height + y]) / (2.0f * dx) * 8.0f;
-    float ddy = (height_current[x * height + (y + 1)] - height_current[x * height + (y - 1)]) / (2.0f * dx) * 8.0f;
+    float ddx = (height_current[(x + 1) * height + y] - height_current[(x - 1) * height + y]) / (2.0f * dx) * meshHeightScale;
+    float ddy = (height_current[x * height + (y + 1)] - height_current[x * height + (y - 1)]) / (2.0f * dx) * meshHeightScale;
     glm::vec3 n(-ddx, -ddy, 1.0f);
     return glm::normalize(n);
 }
@@ -143,7 +144,7 @@ void fillWaterVertices() {
         for (int y = 0; y < height; ++y) {
             waterVertices[v++] = (x - width / 2.0f) * waterScale;
             waterVertices[v++] = (y - height / 2.0f) * waterScale;
-            waterVertices[v++] = height_current[x * height + y] * 8.0f;
+            waterVertices[v++] = height_current[x * height + y] * meshHeightScale;
 
             glm::vec3 normal(0.0f, 0.0f, 1.0f);
             if (x > 0 && x < width - 1 && y > 0 && y < height - 1) {
@@ -534,7 +535,8 @@ int renderLoop() {
         glUniform1f(glGetUniformLocation(causticsShaderProgram, "bottomZ"), BOTTOM_Z);
         glUniform1f(glGetUniformLocation(causticsShaderProgram, "waterIOR"), WATER_IOR);
         glUniform1f(glGetUniformLocation(causticsShaderProgram, "airIOR"), AIR_IOR);
-        glUniform1f(glGetUniformLocation(causticsShaderProgram, "receiverTexel"), (width * waterScale) / float(CAUSTICS_RES));
+        glUniform1f(glGetUniformLocation(causticsShaderProgram, "heightScale"), meshHeightScale);
+        glUniform1f(glGetUniformLocation(causticsShaderProgram, "poolExtent"), extent);
 
         glBindVertexArray(waterVAO);
         glDrawElements(GL_TRIANGLES, (GLsizei)waterIndices.size(), GL_UNSIGNED_INT, 0);
@@ -560,6 +562,7 @@ int renderLoop() {
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, causticsTexture);
         glUniform1i(glGetUniformLocation(bottomShaderProgram, "causticsTexture"), 0);
+        glUniform1f(glGetUniformLocation(bottomShaderProgram, "poolExtent"), extent);
         glBindVertexArray(bottomVAO);
         glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
 

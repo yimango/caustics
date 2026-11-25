@@ -35,6 +35,7 @@ const char* causticVertexShaderSource = R"(
     uniform float bottomZ;
     uniform float waterIOR;
     uniform float airIOR;
+    uniform float heightScale;
 
     void main() {
         vec3 P = (model * vec4(aPos, 1.0)).xyz;
@@ -45,7 +46,7 @@ const char* causticVertexShaderSource = R"(
         }
         vec3 optical = normalize(vec3(N.xy / max(N.z, 0.0001), 1.0));
 
-        vec3 origin = vec3(P.xy, P.z / 8.0);
+        vec3 origin = vec3(P.xy, P.z / heightScale);
         vec3 I = normalize(origin - lightPos);
         float eta = airIOR / max(waterIOR, 0.001);
         vec3 T = refract(I, optical, eta);
@@ -60,11 +61,7 @@ const char* causticVertexShaderSource = R"(
             }
         }
 
-        if (casts < 0.5) {
-            gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
-        } else {
-            gl_Position = projection * view * vec4(hit, 1.0);
-        }
+        gl_Position = projection * view * vec4(hit, 1.0);
 
         FragPos = P;
         Normal = N;
@@ -80,6 +77,8 @@ const char* causticGeometryShaderSource = R"(
     in float casts[];
     flat out float vIntensity;
 
+    uniform float poolExtent;
+
     void main() {
         if (casts[0] < 0.5 || casts[1] < 0.5 || casts[2] < 0.5) {
             return;
@@ -90,9 +89,9 @@ const char* causticGeometryShaderSource = R"(
         vec2 c = FragPos[2].xy;
         float source = abs((b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y));
 
-        vec2 h0 = gl_in[0].gl_Position.xy / gl_in[0].gl_Position.w * 200.0;
-        vec2 h1 = gl_in[1].gl_Position.xy / gl_in[1].gl_Position.w * 200.0;
-        vec2 h2 = gl_in[2].gl_Position.xy / gl_in[2].gl_Position.w * 200.0;
+        vec2 h0 = gl_in[0].gl_Position.xy / gl_in[0].gl_Position.w * poolExtent;
+        vec2 h1 = gl_in[1].gl_Position.xy / gl_in[1].gl_Position.w * poolExtent;
+        vec2 h2 = gl_in[2].gl_Position.xy / gl_in[2].gl_Position.w * poolExtent;
         float receiver = abs((h1.x - h0.x) * (h2.y - h0.y) - (h2.x - h0.x) * (h1.y - h0.y));
         vIntensity = clamp(source / max(receiver, 0.0001), 0.0, 6.0);
 
@@ -151,9 +150,10 @@ const char* bottomFragmentShaderSource = R"(
     out vec4 FragColor;
 
     uniform sampler2D causticsTexture;
+    uniform float poolExtent;
 
     void main() {
-        vec2 causticsUV = (FragPos.xy + vec2(200.0)) / 400.0;
+        vec2 causticsUV = (FragPos.xy + vec2(poolExtent)) / (poolExtent * 2.0);
         float causticIntensity = texture(causticsTexture, causticsUV).a;
         float light = causticIntensity;
         vec3 floorColor = vec3(0.05, 0.14, 0.20);

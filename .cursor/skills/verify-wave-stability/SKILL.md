@@ -64,7 +64,7 @@ Do not raise a ceiling to silence a failure. If `dt`, `c`, `dx`, `damping`, or t
 | `update_wave` | Every step of every scenario |
 | `add_disturbance`, `init_grid` | Startup splashes and the click |
 
-Sync commit: update this after the 400-grid change is committed. Last confirmed green against the working tree that uses `width = height = 400`.
+Last confirmed green against the working tree that uses `width = height = 400`. The check fails when `main.cpp`, `shaders.h`, `CMakeLists.txt`, `include/glad`, or `verify` sources contain a comment.
 
 ## Not covered
 

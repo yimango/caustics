@@ -1,5 +1,4 @@
 #pragma once
-// Compile stand-in. The repo has no GLM headers. update_wave does not use these types.
 namespace glm {
 struct vec3 {
     float x, y, z;

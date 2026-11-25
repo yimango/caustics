@@ -1,6 +1,37 @@
-# Rebuild main.cpp and run the wave-surface check. Exit with the check's status.
 $ErrorActionPreference = 'Stop'
 Set-Location (Split-Path -Parent $PSScriptRoot)
+
+$slash = [string][char]47
+$lineMark = $slash + $slash
+$blockMark = $slash + '*'
+
+$targets = @(
+    'main.cpp',
+    'shaders.h',
+    'CMakeLists.txt',
+    'verify\wave_stability.cpp',
+    'verify\glfw_link_stubs.c',
+    'verify\check.ps1',
+    'include\glad\glad.h',
+    'include\glad\glad.c'
+) + @(Get-ChildItem -Recurse -File verify\stubs | ForEach-Object { $_.FullName.Substring((Get-Location).Path.Length + 1) })
+
+foreach ($relative in $targets) {
+    $lines = Get-Content -LiteralPath $relative
+    for ($n = 0; $n -lt $lines.Count; $n++) {
+        $text = $lines[$n]
+        $hit = $false
+        if ($relative -eq 'CMakeLists.txt') {
+            if ($text -match '^\s*#') { $hit = $true }
+        } elseif ($text.Contains($lineMark) -or $text.Contains($blockMark)) {
+            $hit = $true
+        }
+        if ($hit) {
+            Write-Error ("comment in {0}:{1}" -f $relative, ($n + 1))
+            exit 1
+        }
+    }
+}
 
 function Invoke-Checked([string[]]$Command) {
     & $Command[0] $Command[1..($Command.Length - 1)]
@@ -9,7 +40,7 @@ function Invoke-Checked([string[]]$Command) {
 
 Invoke-Checked @(
     'g++', '-std=c++17', '-O2', '-ffunction-sections', '-fdata-sections',
-    '-Dmain=caustics_main', '-DM_PI=3.14159265358979323846',
+    '-Dmain=caustics_main',
     '-I', 'verify/stubs', '-I', 'include', '-I', 'external/glfw-3.4.bin.WIN64/include',
     '-c', 'main.cpp', '-o', 'verify/main_wave.o'
 )

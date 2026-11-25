@@ -1,5 +1,3 @@
-/* Satisfies GLFW symbols so main.cpp can link. The wave check never calls them.
-   The repo does not ship the GLFW import library (external/glfw lib-* is gitignored). */
 void glfwGetCursorPos(void) {}
 void glfwGetFramebufferSize(void) {}
 void glfwGetWindowSize(void) {}

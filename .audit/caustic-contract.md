@@ -71,7 +71,7 @@ Draw the water mesh into that framebuffer with depth off and `glBlendFunc(GL_ONE
 Floor sample, unchanged:
 
 ```
-causticsUV = (FragPos.xy + vec2(200.0)) / 400.0
+causticsUV = (FragPos.xy + vec2(poolExtent)) / (poolExtent * 2.0)
 causticIntensity = texture(causticsTexture, causticsUV).a
 ```
 
@@ -103,9 +103,10 @@ UV (0, 0) is world (-200, -200). UV (1, 1) is world (200, 200). The ortho projec
 | `bottomZ` | float | `BOTTOM_Z` |
 | `waterIOR` | float | 1.33 |
 | `airIOR` | float | 1.0 |
-| `receiverTexel` | float | `(width * waterScale) / CAUSTICS_RES` |
+| `heightScale` | float | `meshHeightScale` (8) |
+| `poolExtent` | float | `(width / 2) * waterScale` |
 
-`main` uploads `receiverTexel` as `(width * waterScale) / CAUSTICS_RES`. The geometry shader uses the locked half-extent 200 and does not read that uniform. There is no `time` uniform.
+`main` uploads `heightScale` as `meshHeightScale` (8) and `poolExtent` as `(width / 2) * waterScale`. The geometry shader and the floor shader read `poolExtent`. The vertex shader divides the exaggerated height by `heightScale`. There is no `time` uniform and no `receiverTexel` uniform.
 
 Beauty pass uploads, unchanged except dropping `time`:
 
@@ -121,7 +122,7 @@ Inputs are `aPos` and `aNormal`. Outputs are `FragPos` (surface position in worl
 
 1. `P = (model * vec4(aPos, 1)).xyz`
 2. `N = normalize(normalMatrix * aNormal)`. If `N.z < 0`, negate `N`.
-3. The mesh slope is already scaled by 8. The ray uses `optical = normalize(N.xy / N.z, 1)` and `origin = (P.xy, P.z / 8)`.
+3. The mesh slope uses `meshHeightScale`. The ray uses `optical = normalize(N.xy / N.z, 1)` and `origin = (P.xy, P.z / heightScale)`.
 4. `I = normalize(origin - lightPos)`
 5. `eta = airIOR / max(waterIOR, 0.001)`
 6. `T = refract(I, optical, eta)`
@@ -141,7 +142,7 @@ receiver = abs(cross(hit1.xy - hit0.xy, hit2.xy - hit0.xy))
 intensity = clamp(source / max(receiver, 0.0001), 0.0, 6.0)
 ```
 
-Hit positions come from clip space times 200, the pool half-extent. On flat water, `intensity` is about 1. Where the surface triangle lands on a smaller floor triangle, `intensity` rises. The cap is 6.
+Hit positions come from clip space times `poolExtent`. On flat water, `intensity` is about 1. Where the surface triangle lands on a smaller floor triangle, `intensity` rises. The cap is 6. The geometry shader drops a triangle when any vertex has `casts < 0.5`, so the vertex shader does not park missed rays off screen.
 
 ## Caustic fragment shader
 

@@ -1,4 +1,3 @@
-// Runs the real update_wave from main.cpp. The step itself is not reimplemented here.
 #include <cmath>
 #include <cstdint>
 #include <iostream>
@@ -19,13 +18,10 @@ void update_wave();
 void add_disturbance(int x, int y, float height);
 void init_grid();
 
-// 4x4, every sign pattern, 200 steps. update_wave is linear, so the corners
-// cover every surface whose cells lie in [-1, 1].
 static const int kCornerSteps = 200;
 static const float kCornerPeakCeiling = 4.0f;
 static const float kCornerFinalCeiling = 2.0f;
 
-// 400x400 scenarios. The checkerboard is the stiffest ripple the stencil sees.
 static const int kPoolSteps = 500;
 static const float kCheckerPeakCeiling = 14.0f;
 static const float kSettledHeight = 1.0f;
@@ -90,8 +86,6 @@ static Cell tallest() {
     return best;
 }
 
-// Bits 0..15: cell (i, j), bit i * 4 + j. 1 is +1, 0 is -1.
-// Bits 16..19: previous interior cells (1,1), (1,2), (2,1), (2,2).
 static void load_corner(std::uint32_t mask) {
     zero_grids();
     for (int i = 0; i < 4; ++i) {
