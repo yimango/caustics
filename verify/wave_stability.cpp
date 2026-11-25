@@ -11,9 +11,9 @@ extern float dx;
 extern float dt;
 extern float c;
 extern float damping;
-extern std::vector<std::vector<float>> height_current;
-extern std::vector<std::vector<float>> height_prev;
-extern std::vector<std::vector<float>> height_next;
+extern std::vector<float> height_current;
+extern std::vector<float> height_prev;
+extern std::vector<float> height_next;
 
 void update_wave();
 void add_disturbance(int x, int y, float height);
@@ -25,7 +25,7 @@ static const int kCornerSteps = 200;
 static const float kCornerPeakCeiling = 4.0f;
 static const float kCornerFinalCeiling = 2.0f;
 
-// 200x200 scenarios. The checkerboard is the stiffest ripple the stencil sees.
+// 400x400 scenarios. The checkerboard is the stiffest ripple the stencil sees.
 static const int kPoolSteps = 500;
 static const float kCheckerPeakCeiling = 14.0f;
 static const float kSettledHeight = 1.0f;
@@ -37,30 +37,33 @@ static void fail(const std::string& message) {
     ++failures;
 }
 
+static int idx(int x, int y) {
+    return x * height + y;
+}
+
 static void use_grid(int n) {
     width = n;
     height = n;
-    height_current.assign(n, std::vector<float>(n, 0.0f));
-    height_prev.assign(n, std::vector<float>(n, 0.0f));
-    height_next.assign(n, std::vector<float>(n, 0.0f));
+    const std::size_t cells = static_cast<std::size_t>(n) * static_cast<std::size_t>(n);
+    height_current.assign(cells, 0.0f);
+    height_prev.assign(cells, 0.0f);
+    height_next.assign(cells, 0.0f);
 }
 
 static void zero_grids() {
-    for (int i = 0; i < width; ++i) {
-        for (int j = 0; j < height; ++j) {
-            height_current[i][j] = 0.0f;
-            height_prev[i][j] = 0.0f;
-            height_next[i][j] = 0.0f;
-        }
+    const int cells = width * height;
+    for (int i = 0; i < cells; ++i) {
+        height_current[i] = 0.0f;
+        height_prev[i] = 0.0f;
+        height_next[i] = 0.0f;
     }
 }
 
 static bool finite_grids() {
-    for (int i = 0; i < width; ++i) {
-        for (int j = 0; j < height; ++j) {
-            if (!std::isfinite(height_current[i][j]) || !std::isfinite(height_prev[i][j])) {
-                return false;
-            }
+    const int cells = width * height;
+    for (int i = 0; i < cells; ++i) {
+        if (!std::isfinite(height_current[i]) || !std::isfinite(height_prev[i])) {
+            return false;
         }
     }
     return true;
@@ -76,9 +79,9 @@ static Cell tallest() {
     Cell best{0.0f, 0, 0};
     for (int i = 0; i < width; ++i) {
         for (int j = 0; j < height; ++j) {
-            float value = std::fabs(height_current[i][j]);
+            float value = std::fabs(height_current[idx(i, j)]);
             if (value > std::fabs(best.value)) {
-                best.value = height_current[i][j];
+                best.value = height_current[idx(i, j)];
                 best.i = i;
                 best.j = j;
             }
@@ -87,19 +90,19 @@ static Cell tallest() {
     return best;
 }
 
-// Bits 0..15: height_current[i][j] for i * 4 + j. 1 is +1, 0 is -1.
+// Bits 0..15: cell (i, j), bit i * 4 + j. 1 is +1, 0 is -1.
 // Bits 16..19: previous interior cells (1,1), (1,2), (2,1), (2,2).
 static void load_corner(std::uint32_t mask) {
     zero_grids();
     for (int i = 0; i < 4; ++i) {
         for (int j = 0; j < 4; ++j) {
             int bit = i * 4 + j;
-            height_current[i][j] = (mask & (1u << bit)) ? 1.0f : -1.0f;
+            height_current[idx(i, j)] = (mask & (1u << bit)) ? 1.0f : -1.0f;
         }
     }
     const int interior[4][2] = {{1, 1}, {1, 2}, {2, 1}, {2, 2}};
     for (int k = 0; k < 4; ++k) {
-        height_prev[interior[k][0]][interior[k][1]] =
+        height_prev[idx(interior[k][0], interior[k][1])] =
             (mask & (1u << (16 + k))) ? 1.0f : -1.0f;
     }
 }
@@ -112,31 +115,31 @@ static bool close_enough(float a, float b) {
 static void check_linear() {
     use_grid(4);
     load_corner(0x000abcdeu);
-    std::vector<std::vector<float>> a_cur = height_current;
-    std::vector<std::vector<float>> a_prev = height_prev;
+    std::vector<float> a_cur = height_current;
+    std::vector<float> a_prev = height_prev;
     update_wave();
-    std::vector<std::vector<float>> out_a = height_current;
+    std::vector<float> out_a = height_current;
 
     load_corner(0x00054321u);
-    std::vector<std::vector<float>> b_cur = height_current;
-    std::vector<std::vector<float>> b_prev = height_prev;
+    std::vector<float> b_cur = height_current;
+    std::vector<float> b_prev = height_prev;
     update_wave();
-    std::vector<std::vector<float>> out_b = height_current;
+    std::vector<float> out_b = height_current;
 
     zero_grids();
     for (int i = 0; i < 4; ++i) {
         for (int j = 0; j < 4; ++j) {
-            height_current[i][j] = a_cur[i][j] + b_cur[i][j];
-            height_prev[i][j] = a_prev[i][j] + b_prev[i][j];
+            height_current[idx(i, j)] = a_cur[idx(i, j)] + b_cur[idx(i, j)];
+            height_prev[idx(i, j)] = a_prev[idx(i, j)] + b_prev[idx(i, j)];
         }
     }
     update_wave();
-    std::vector<std::vector<float>> out_sum = height_current;
+    std::vector<float> out_sum = height_current;
 
     bool linear = true;
     for (int i = 0; i < 4; ++i) {
         for (int j = 0; j < 4; ++j) {
-            if (!close_enough(out_sum[i][j], out_a[i][j] + out_b[i][j])) {
+            if (!close_enough(out_sum[idx(i, j)], out_a[idx(i, j)] + out_b[idx(i, j)])) {
                 linear = false;
             }
         }
@@ -149,7 +152,7 @@ static void check_linear() {
     update_wave();
     for (int i = 0; i < 4; ++i) {
         for (int j = 0; j < 4; ++j) {
-            if (height_current[i][j] != 0.0f) {
+            if (height_current[idx(i, j)] != 0.0f) {
                 fail("update_wave moved a flat zero surface at cell (" + std::to_string(i) + "," +
                      std::to_string(j) + ")");
                 return;
@@ -268,8 +271,8 @@ static void checkerboard() {
     for (int i = 1; i < width - 1; ++i) {
         for (int j = 1; j < height - 1; ++j) {
             float sign = ((i + j) % 2 == 0) ? 1.0f : -1.0f;
-            height_current[i][j] = sign;
-            height_prev[i][j] = sign;
+            height_current[idx(i, j)] = sign;
+            height_prev[idx(i, j)] = sign;
         }
     }
 }
