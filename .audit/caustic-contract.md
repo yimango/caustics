@@ -54,7 +54,7 @@ std::vector<float> height_next;
 
 ## Framebuffer and UV
 
-`setupCausticsFBO` is unchanged. `GL_RGBA32F`, `CAUSTICS_RES` square, linear filter, color attachment 0, cleared to 0.
+`setupCausticsFBO` creates two `GL_RGBA32F` textures at `CAUSTICS_RES`, with a linear filter and clamp-to-edge. `causticsFBO` holds the light map. `causticsBlurFBO` holds the horizontal blur. Color attachment 0 is cleared to 0. The light map is cleared again every frame before the mesh draw.
 
 Caustic camera, every frame:
 
@@ -64,13 +64,13 @@ view = lookAt((0, 0, 80), (0, 0, 0), (0, 1, 0))
 projection = ortho(-extent, extent, -extent, extent, 0.1, 300)
 ```
 
-Draw the water mesh into that framebuffer with depth off and `glBlendFunc(GL_ONE, GL_ONE)`. Then restore the window viewport.
+Draw the water mesh into `causticsFBO` with depth off and `glBlendFunc(GL_ONE, GL_ONE)`. `blurCausticMap` then turns blending off and draws a fullscreen triangle twice. The horizontal pass reads `causticsTexture` and writes `causticsBlurTexture`. The vertical pass reads `causticsBlurTexture` and writes `causticsTexture`. Each pass is a normalized Gaussian with sigma 6 texels and offsets from -18 to 18. `direction` is `(1/CAUSTICS_RES, 0)`, then `(0, 1/CAUSTICS_RES)`. The shader forms the sample coordinate as `gl_FragCoord.xy` times the texel size in `direction`. The render loop then restores the window viewport.
 
-Floor sample, unchanged:
+Floor sample:
 
 ```
 causticsUV = (FragPos.xy + vec2(poolExtent)) / (poolExtent * 2.0)
-causticIntensity = texture(causticsTexture, causticsUV).r
+light = texture(causticsTexture, causticsUV).r
 ```
 
 UV (0, 0) is world (-200, -200). UV (1, 1) is world (200, 200). The ortho projection uses the same square, so a floor hit and a floor sample name the same texel.
@@ -82,12 +82,13 @@ UV (0, 0) is world (-200, -200). UV (1, 1) is world (200, 200). The ortho projec
 | Water | `surfaceVertexShaderSource` | `waterFragmentShaderSource` |
 | Floor | `bottomVertexShaderSource` | `bottomFragmentShaderSource` |
 | Caustics | `causticVertexShaderSource` | `causticsFragmentShaderSource` |
+| Caustic blur | `causticBlurVertexShaderSource` | `causticBlurFragmentShaderSource` |
 | Sky | `skyboxVertexShaderSource` | `skyboxFragmentShaderSource` |
 | Overlay | `overlayVertexShaderSource` | `overlayFragmentShaderSource` |
 
 `surfaceVertexShaderSource` samples height with Catmull-Rom and outputs `FragPos` and `Normal`. The slope is that curve at plus and minus 0.5 world units. Water uses it. The floor uses `bottomVertexShaderSource`, which is only the model-view-projection transform. The caustic pass uses `causticVertexShaderSource`.
 
-`main` compiles the caustic program from `causticVertexShaderSource` and `causticsFragmentShaderSource`. The floor uses `bottomVertexShaderSource`.
+`main` compiles the caustic program from `causticVertexShaderSource` and `causticsFragmentShaderSource`. It compiles the blur program from `causticBlurVertexShaderSource` and `causticBlurFragmentShaderSource`. The floor uses `bottomVertexShaderSource` and `bottomFragmentShaderSource`. The floor fetches the blurred map once.
 
 ## Caustic uniforms
 
@@ -108,6 +109,8 @@ UV (0, 0) is world (-200, -200). UV (1, 1) is world (200, 200). The ortho projec
 
 `main` uploads `heightScale`, `poolExtent`, `gridSize`, and `heightTex` on texture unit 1. `poolExtent` is `(width / 2) * waterScale`. The height texture is R32F, one float per cell, updated with `glTexSubImage2D` after each wave step. There is no geometry shader, no `time` uniform, and no `receiverTexel` uniform.
 
+The blur program reads `source` on texture unit 0 and `direction`. The horizontal pass sets `direction` to `(1/CAUSTICS_RES, 0)`. The vertical pass sets `direction` to `(0, 1/CAUSTICS_RES)`.
+
 Beauty pass uploads:
 
 - Floor reads `model`, `view`, `projection`, `causticsTexture` on texture unit 0, `poolExtent`, and `bottomZ`.
@@ -127,7 +130,7 @@ receiver = abs(cross(hit(x+dx) - hit, hit(y+dy) - hit))
 intensity = clamp(dx * dy / max(receiver, 0.0001), 0.0, 4.0)
 ```
 
-On flat water, intensity is about 1. Where neighboring rays land closer together, intensity rises. The floor reads the red channel through a 5-tap cross so a one-pixel ridge stays visible without turning into a blob.
+On flat water, intensity is about 1. Where neighboring rays land closer together, intensity rises. The Gaussian blur then spreads each sample by sigma 6 texels, about 1.17 world units on the 400-unit pool. The Snell hit and the area ratio stay in the vertex shader.
 
 ## Caustic fragment shader
 
@@ -137,7 +140,7 @@ FragColor = vec4(intensity)
 
 ## Floor and water
 
-Floor tiles are 25 world units. Tile A is `vec3(0.62, 0.70, 0.66)`. Tile B is `vec3(0.33, 0.50, 0.52)`. Grout is `vec3(0.16, 0.22, 0.24)`, about 0.06 of the tile. The 5-tap sample is tonemapped before it multiplies the tile.
+Floor tiles are 25 world units. Tile A is `vec3(0.62, 0.70, 0.66)`. Tile B is `vec3(0.33, 0.50, 0.52)`. Grout is `vec3(0.16, 0.22, 0.24)`, about 0.06 of the tile. The light-map sample is tonemapped before it multiplies the tile.
 
 ```
 tone = light / (1.0 + 0.85 * max(light - 0.65, 0.0))

@@ -73,10 +73,13 @@ int floorIndexCount = 0;
 int bottomIndexCount = 0;
 unsigned int skyboxVAO, skyboxVBO;
 unsigned int causticsFBO, causticsTexture;
+unsigned int causticsBlurFBO, causticsBlurTexture;
+unsigned int causticBlurVAO;
 unsigned int heightTexture;
 unsigned int waterShaderProgram;
 unsigned int skyboxShaderProgram;
 unsigned int causticsShaderProgram;
+unsigned int causticBlurShaderProgram;
 unsigned int bottomShaderProgram;
 
 int framebufferWidth = (int)SCR_WIDTH;
@@ -721,10 +724,46 @@ void setupCausticsFBO() {
         std::cerr << "FBO incomplete\n";
     }
 
+    glGenFramebuffers(1, &causticsBlurFBO);
+    glBindFramebuffer(GL_FRAMEBUFFER, causticsBlurFBO);
+    glGenTextures(1, &causticsBlurTexture);
+    glBindTexture(GL_TEXTURE_2D, causticsBlurTexture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, CAUSTICS_RES, CAUSTICS_RES, 0, GL_RGBA, GL_FLOAT, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, causticsBlurTexture, 0);
+    glDrawBuffers(1, &buf);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        std::cerr << "FBO incomplete\n";
+    }
+    glGenVertexArrays(1, &causticBlurVAO);
+
     glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
     glClear(GL_COLOR_BUFFER_BIT);
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+void blurCausticMap() {
+    glDisable(GL_BLEND);
+    glUseProgram(causticBlurShaderProgram);
+    glBindVertexArray(causticBlurVAO);
+    glUniform1i(glGetUniformLocation(causticBlurShaderProgram, "source"), 0);
+    glActiveTexture(GL_TEXTURE0);
+
+    float horizontal[2] = {1.0f / (float)CAUSTICS_RES, 0.0f};
+    float vertical[2] = {0.0f, 1.0f / (float)CAUSTICS_RES};
+    glBindFramebuffer(GL_FRAMEBUFFER, causticsBlurFBO);
+    glBindTexture(GL_TEXTURE_2D, causticsTexture);
+    glUniform2fv(glGetUniformLocation(causticBlurShaderProgram, "direction"), 1, horizontal);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, causticsFBO);
+    glBindTexture(GL_TEXTURE_2D, causticsBlurTexture);
+    glUniform2fv(glGetUniformLocation(causticBlurShaderProgram, "direction"), 1, vertical);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
 }
 
 void setupHeightTexture() {
@@ -900,6 +939,7 @@ int renderLoop() {
 
         glBindVertexArray(waterVAO);
         glDrawElements(GL_TRIANGLES, (GLsizei)waterIndices.size(), GL_UNSIGNED_INT, 0);
+        blurCausticMap();
 
         glDisable(GL_BLEND);
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -994,6 +1034,7 @@ int main(int argc, char** argv) {
     waterShaderProgram = createShaderProgram(surfaceVertexShaderSource, waterFragmentShaderSource);
     skyboxShaderProgram = createShaderProgram(skyboxVertexShaderSource, skyboxFragmentShaderSource);
     causticsShaderProgram = createShaderProgram(causticVertexShaderSource, causticsFragmentShaderSource);
+    causticBlurShaderProgram = createShaderProgram(causticBlurVertexShaderSource, causticBlurFragmentShaderSource);
     bottomShaderProgram = createShaderProgram(bottomVertexShaderSource, bottomFragmentShaderSource);
     overlayShaderProgram = createShaderProgram(overlayVertexShaderSource, overlayFragmentShaderSource);
     overlayColorLoc = glGetUniformLocation(overlayShaderProgram, "color");
@@ -1023,10 +1064,14 @@ int main(int argc, char** argv) {
     glDeleteBuffers(1, &skyboxVBO);
     glDeleteFramebuffers(1, &causticsFBO);
     glDeleteTextures(1, &causticsTexture);
+    glDeleteFramebuffers(1, &causticsBlurFBO);
+    glDeleteTextures(1, &causticsBlurTexture);
+    glDeleteVertexArrays(1, &causticBlurVAO);
     glDeleteTextures(1, &heightTexture);
     glDeleteProgram(waterShaderProgram);
     glDeleteProgram(skyboxShaderProgram);
     glDeleteProgram(causticsShaderProgram);
+    glDeleteProgram(causticBlurShaderProgram);
     glDeleteProgram(bottomShaderProgram);
     glDeleteVertexArrays(1, &overlayVAO);
     glDeleteBuffers(1, &overlayVBO);
