@@ -5,10 +5,10 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 namespace {
-constexpr float kMinPitch = 0.05f;
-constexpr float kMaxPitch = 1.55f;
-constexpr float kMinDistance = 40.0f;
-constexpr float kMaxDistance = 750.0f;
+constexpr float kMinPitch = 0.02f;
+constexpr float kMaxPitch = 1.565f;
+constexpr float kMinDistance = 25.0f;
+constexpr float kMaxDistance = 1200.0f;
 } // namespace
 
 Camera::Camera() {
@@ -23,17 +23,17 @@ void Camera::setPreset(CameraPreset preset) {
                               glm::vec3(0.0f, 1.0f, 0.0f));
             break;
         case CameraPreset::Perspective:
-            setPositionTarget(glm::vec3(220.0f, -260.0f, 240.0f),
-                              glm::vec3(0.0f, 0.0f, -15.0f),
-                              glm::vec3(0.0f, 0.0f, 1.0f));
-            break;
-        case CameraPreset::LowAngle:
-            setPositionTarget(glm::vec3(180.0f, -270.0f, 95.0f),
+            setPositionTarget(glm::vec3(90.0f, -120.0f, 95.0f),
                               glm::vec3(0.0f, 0.0f, -10.0f),
                               glm::vec3(0.0f, 0.0f, 1.0f));
             break;
+        case CameraPreset::LowAngle:
+            setPositionTarget(glm::vec3(130.0f, -130.0f, 55.0f),
+                              glm::vec3(-120.0f, 120.0f, -15.0f),
+                              glm::vec3(0.0f, 0.0f, 1.0f));
+            break;
         case CameraPreset::Side:
-            setPositionTarget(glm::vec3(0.0f, -340.0f, 120.0f),
+            setPositionTarget(glm::vec3(0.0f, -240.0f, 45.0f),
                               glm::vec3(0.0f, 0.0f, -10.0f),
                               glm::vec3(0.0f, 0.0f, 1.0f));
             break;
@@ -44,6 +44,19 @@ void Camera::setPositionTarget(const glm::vec3& pos, const glm::vec3& target, co
     target_ = target;
     up_ = up;
     syncSphericalFromPosition(pos);
+}
+
+void Camera::setPositionTargetAutoUp(const glm::vec3& pos, const glm::vec3& target) {
+    const glm::vec3 delta = target - pos;
+    const float len = glm::length(delta);
+    glm::vec3 chosenUp(0.0f, 0.0f, 1.0f);
+    if (len > 1e-5f) {
+        const float cosAngle = std::abs(delta.z / len);
+        if (cosAngle > 0.98f) {
+            chosenUp = glm::vec3(0.0f, 1.0f, 0.0f);
+        }
+    }
+    setPositionTarget(pos, target, chosenUp);
 }
 
 void Camera::syncSphericalFromPosition(const glm::vec3& pos) {
@@ -58,7 +71,7 @@ void Camera::syncSphericalFromPosition(const glm::vec3& pos) {
     distance_ = std::clamp(len, kMinDistance, kMaxDistance);
     const float horiz = std::hypot(offset.x, offset.y);
     pitch_ = std::clamp(std::atan2(offset.z, horiz), kMinPitch, kMaxPitch);
-    yaw_ = std::atan2(offset.y, offset.x);
+    yaw_ = (horiz > 1e-5f) ? std::atan2(offset.y, offset.x) : 0.0f;
 }
 
 void Camera::orbit(float deltaYawRad, float deltaPitchRad) {
@@ -69,9 +82,19 @@ void Camera::orbit(float deltaYawRad, float deltaPitchRad) {
 
 void Camera::pan(float deltaRight, float deltaUp) {
     const glm::vec3 pos = position();
-    const glm::vec3 forward = glm::normalize(target_ - pos);
-    const glm::vec3 right = glm::normalize(glm::cross(forward, up_));
-    const glm::vec3 camUp = glm::cross(right, forward);
+    const glm::vec3 diff = target_ - pos;
+    if (glm::dot(diff, diff) < 1e-8f) {
+        return;
+    }
+    const glm::vec3 forward = glm::normalize(diff);
+    glm::vec3 refUp = up_;
+    glm::vec3 right = glm::cross(forward, refUp);
+    if (glm::dot(right, right) < 1e-6f) {
+        refUp = glm::vec3(0.0f, 1.0f, 0.0f);
+        right = glm::cross(forward, refUp);
+    }
+    right = glm::normalize(right);
+    const glm::vec3 camUp = glm::normalize(glm::cross(right, forward));
     target_ += right * deltaRight + camUp * deltaUp;
 }
 
