@@ -2,9 +2,11 @@
 
 #include <glad/glad.h>
 #include <glm/gtc/matrix_transform.hpp>
+#include <algorithm>
 #include <iostream>
 #include <vector>
 
+#include "render/pool_optics.h"
 #include "render/shaders/caustics_shaders.h"
 
 CausticsPass::~CausticsPass() {
@@ -30,7 +32,7 @@ bool CausticsPass::init(const PoolConfig& pool, int resolution) {
 
     glGenTextures(1, &causticsTexture_);
     glBindTexture(GL_TEXTURE_2D, causticsTexture_);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, resolution_, resolution_, 0, GL_RGBA, GL_FLOAT, nullptr);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, resolution_, resolution_, 0, GL_RGBA, GL_HALF_FLOAT, nullptr);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -51,7 +53,7 @@ bool CausticsPass::init(const PoolConfig& pool, int resolution) {
 
     glGenTextures(1, &causticsBlurTexture_);
     glBindTexture(GL_TEXTURE_2D, causticsBlurTexture_);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, resolution_, resolution_, 0, GL_RGBA, GL_FLOAT, nullptr);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, resolution_, resolution_, 0, GL_RGBA, GL_HALF_FLOAT, nullptr);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -139,6 +141,7 @@ void CausticsPass::uploadHeight(const WaveSim& sim) {
 
 void CausticsPass::blurCausticMap() {
     glDisable(GL_BLEND);
+    glDisable(GL_CULL_FACE);
     blurShader_.use();
     glBindVertexArray(causticBlurVAO_);
     blurShader_.setInt("source", 0);
@@ -158,15 +161,17 @@ void CausticsPass::blurCausticMap() {
 
 void CausticsPass::render(unsigned int waterVAO,
                           int waterIndexCount,
-                          float meshSpacing,
+                          float /*meshSpacing*/,
                           const PoolConfig& pool,
                           const LightConfig& light,
                           const RenderSettings& settings) {
     poolHalfExtent_ = pool.halfExtent();
+    const glm::vec2 atlasHalfSpan = poolAtlasHalfSpan(poolHalfExtent_, pool.bottomZ, pool.lipZ);
 
     glBindFramebuffer(GL_FRAMEBUFFER, causticsFBO_);
     glViewport(0, 0, resolution_, resolution_);
     glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
     glEnable(GL_BLEND);
     glBlendFunc(GL_ONE, GL_ONE);
     glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
@@ -176,7 +181,7 @@ void CausticsPass::render(unsigned int waterVAO,
     const glm::mat4 causticsView =
         glm::lookAt(glm::vec3(0.0f, 0.0f, 80.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
     const glm::mat4 causticsProj =
-        glm::ortho(-poolHalfExtent_.x, poolHalfExtent_.x, -poolHalfExtent_.y, poolHalfExtent_.y, 0.1f, 300.0f);
+        glm::ortho(-atlasHalfSpan.x, atlasHalfSpan.x, -atlasHalfSpan.y, atlasHalfSpan.y, 0.1f, 300.0f);
 
     causticsShader_.use();
     causticsShader_.setMat4("model", model);
@@ -184,22 +189,44 @@ void CausticsPass::render(unsigned int waterVAO,
     causticsShader_.setMat4("projection", causticsProj);
     causticsShader_.setVec3("lightPos", light.position);
     causticsShader_.setFloat("bottomZ", pool.bottomZ);
-    causticsShader_.setFloat("waterIOR", settings.waterIOR);
+    causticsShader_.setFloat("lipZ", pool.lipZ);
     causticsShader_.setFloat("airIOR", settings.airIOR);
     causticsShader_.setFloat("heightScale", pool.meshHeightScale);
     causticsShader_.setVec2("poolHalfExtent", poolHalfExtent_);
     causticsShader_.setVec2("gridSize", glm::vec2(static_cast<float>(pool.gridW), static_cast<float>(pool.gridH)));
-    causticsShader_.setFloat("meshSpacing", meshSpacing);
     causticsShader_.setInt("heightTex", 1);
 
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, heightTexture_);
 
     glBindVertexArray(waterVAO);
-    glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(waterIndexCount), GL_UNSIGNED_INT, nullptr);
+
+    const float dispersion = std::max(settings.dispersion, 0.0f);
+    if (dispersion <= 1e-4f) {
+        causticsShader_.setFloat("waterIOR", settings.waterIOR);
+        causticsShader_.setVec3("channelMask", glm::vec3(1.0f, 1.0f, 1.0f));
+        glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(waterIndexCount), GL_UNSIGNED_INT, nullptr);
+    } else {
+        const float iorR = std::max(settings.airIOR + 0.05f, settings.waterIOR - dispersion);
+        const float iorG = settings.waterIOR;
+        const float iorB = settings.waterIOR + dispersion;
+
+        causticsShader_.setFloat("waterIOR", iorR);
+        causticsShader_.setVec3("channelMask", glm::vec3(1.0f, 0.0f, 0.0f));
+        glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(waterIndexCount), GL_UNSIGNED_INT, nullptr);
+
+        causticsShader_.setFloat("waterIOR", iorG);
+        causticsShader_.setVec3("channelMask", glm::vec3(0.0f, 1.0f, 0.0f));
+        glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(waterIndexCount), GL_UNSIGNED_INT, nullptr);
+
+        causticsShader_.setFloat("waterIOR", iorB);
+        causticsShader_.setVec3("channelMask", glm::vec3(0.0f, 0.0f, 1.0f));
+        glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(waterIndexCount), GL_UNSIGNED_INT, nullptr);
+    }
 
     blurCausticMap();
 
     glDisable(GL_BLEND);
+    glEnable(GL_DEPTH_TEST);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }

@@ -1,81 +1,117 @@
 #pragma once
 
+#include "render/pool_optics.h"
 #include "render/shaders/common_height.h"
 
 inline constexpr const char* kCausticVertexShader = R"(
     #version 330 core
     layout (location = 0) in vec3 aPos;
 
-    smooth out float casts;
-    smooth out float intensity;
+    smooth out vec3 vOldPos;
+    smooth out vec2 vUnfoldedPos;
+    smooth out vec4 vWallMask;
+    smooth out float vValid;
+    smooth out float vFluxWeight;
 
     uniform mat4 model;
     uniform mat4 view;
     uniform mat4 projection;
     uniform vec3 lightPos;
     uniform float bottomZ;
+    uniform float lipZ;
     uniform float waterIOR;
     uniform float airIOR;
     uniform float heightScale;
     uniform vec2 poolHalfExtent;
     uniform sampler2D heightTex;
     uniform vec2 gridSize;
-    uniform float meshSpacing;
-)" WAVE_HEIGHT_SAMPLE R"(
-    bool floorHit(vec2 xy, out vec3 hit) {
-        float h = sampleHeight(xy);
-        float dhdx;
-        float dhdy;
-        heightSlope(xy, dhdx, dhdy);
-        vec3 optical = normalize(vec3(-dhdx, -dhdy, 1.0));
-        vec3 origin = vec3(xy, h);
-        vec3 incident = normalize(origin - lightPos);
-        float eta = airIOR / max(waterIOR, 0.001);
-        vec3 transmitted = refract(incident, optical, eta);
-        hit = origin;
-        if (transmitted.z >= 0.0) {
-            return false;
-        }
-        float travel = (bottomZ - origin.z) / transmitted.z;
-        if (travel <= 0.0) {
-            return false;
-        }
-        hit = origin + transmitted * travel;
-        return true;
-    }
-
+)" WAVE_HEIGHT_SAMPLE POOL_OPTICS_GLSL R"(
     void main() {
         vec2 xy = (model * vec4(aPos, 1.0)).xy;
-        vec3 hit = vec3(xy, sampleHeight(xy));
-        casts = 0.0;
-        intensity = 0.0;
-        vec3 center;
-        if (floorHit(xy, center)) {
-            casts = 1.0;
-            hit = center;
-            float spacing = meshSpacing > 0.0 ? meshSpacing : (poolHalfExtent.x * 2.0) / max(gridSize.x - 1.0, 1.0);
-            vec3 hitX;
-            vec3 hitY;
-            if (floorHit(xy + vec2(spacing, 0.0), hitX) && floorHit(xy + vec2(0.0, spacing), hitY)) {
-                vec2 edgeX = hitX.xy - center.xy;
-                vec2 edgeY = hitY.xy - center.xy;
-                float receiver = abs(edgeX.x * edgeY.y - edgeX.y * edgeY.x);
-                float source = spacing * spacing;
-                intensity = clamp(source / max(receiver, 0.0001), 0.0, 4.0);
+        float hRaw;
+        vec2 gradRaw;
+        sampleHeightAndGrad(xy, hRaw, gradRaw);
+
+        float hWorld = clamp(hRaw * heightScale, bottomZ + 1.0, lipZ - 0.5);
+        vec2 gradWorld = gradRaw * (heightScale * 0.55);
+        vec3 N = normalize(vec3(-gradWorld.x, -gradWorld.y, 1.0));
+        vec3 origin = vec3(xy, hWorld);
+
+        vec3 incident = normalize(origin - lightPos);
+        float cosI = dot(-incident, N);
+        float eta = airIOR / max(waterIOR, 0.001);
+
+        vOldPos = origin;
+        vUnfoldedPos = xy;
+        vWallMask = vec4(0.0);
+        vValid = 0.0;
+        vFluxWeight = 0.0;
+
+        if (cosI > 0.001) {
+            vec3 transmitted = refract(incident, N, eta);
+            if (dot(transmitted, transmitted) > 1e-4) {
+                vec3 hitPos;
+                int hitFace;
+                if (poolBoxHit(origin, transmitted, poolHalfExtent, bottomZ, lipZ, hitPos, hitFace)) {
+                    float r0 = (airIOR - waterIOR) / max(airIOR + waterIOR, 0.001);
+                    float f0 = r0 * r0;
+                    float fresnel = f0 + (1.0 - f0) * pow(clamp(1.0 - cosI, 0.0, 1.0), 5.0);
+                    float transmit = clamp(1.0 - fresnel, 0.0, 1.0);
+                    float rimVis = rimVisibility(origin, lightPos, poolHalfExtent, lipZ, 1.5);
+
+                    vUnfoldedPos = unfoldPoolPoint(hitPos, hitFace, poolHalfExtent, bottomZ);
+                    vWallMask = poolWallMask(hitFace);
+                    vValid = 1.0;
+                    vFluxWeight = transmit * cosI * rimVis;
+                }
             }
         }
-        gl_Position = projection * view * vec4(hit, 1.0);
+
+        gl_Position = projection * view * vec4(vUnfoldedPos, 0.0, 1.0);
     }
 )";
 
 inline constexpr const char* kCausticFragmentShader = R"(
     #version 330 core
-    smooth in float intensity;
+    smooth in vec3 vOldPos;
+    smooth in vec2 vUnfoldedPos;
+    smooth in vec4 vWallMask;
+    smooth in float vValid;
+    smooth in float vFluxWeight;
 
     out vec4 FragColor;
 
+    uniform vec2 poolHalfExtent;
+    uniform vec3 channelMask;
+
     void main() {
-        FragColor = vec4(intensity);
+        if (vValid < 0.999) {
+            discard;
+        }
+        // Discard triangles jumping across a wall-to-wall corner seam.
+        float activeWalls =
+            step(1e-4, vWallMask.x) +
+            step(1e-4, vWallMask.y) +
+            step(1e-4, vWallMask.z) +
+            step(1e-4, vWallMask.w);
+        if (activeWalls > 1.5) {
+            discard;
+        }
+        if (abs(vUnfoldedPos.x) > poolHalfExtent.x && abs(vUnfoldedPos.y) > poolHalfExtent.y) {
+            discard;
+        }
+
+        vec3 dOldX = dFdx(vOldPos);
+        vec3 dOldY = dFdy(vOldPos);
+        float oldArea = length(cross(dOldX, dOldY));
+
+        vec2 dNewX = dFdx(vUnfoldedPos);
+        vec2 dNewY = dFdy(vUnfoldedPos);
+        float newArea = abs(dNewX.x * dNewY.y - dNewX.y * dNewY.x);
+
+        float ratio = clamp(oldArea / max(newArea, 1e-4), 0.0, 5.0);
+        float flux = ratio * max(vFluxWeight, 0.0);
+        FragColor = vec4(channelMask * flux, 1.0);
     }
 )";
 
@@ -97,10 +133,10 @@ inline constexpr const char* kCausticBlurFragmentShader = R"(
     void main() {
         float texel = abs(direction.x) + abs(direction.y);
         vec2 uv = gl_FragCoord.xy * texel;
-        float sigma = 6.0;
+        float sigma = 1.8;
         vec4 sum = vec4(0.0);
         float weightSum = 0.0;
-        for (int i = -18; i <= 18; ++i) {
+        for (int i = -5; i <= 5; ++i) {
             float x = float(i);
             float w = exp(-0.5 * x * x / (sigma * sigma));
             sum += texture(source, uv + direction * x) * w;
