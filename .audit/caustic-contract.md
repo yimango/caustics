@@ -1,172 +1,119 @@
-# Caustic interface contract
+# Caustic Interface & Boundary Physics Contract
 
-Reference for `main.cpp` and `shaders.h`. The pool, the wave step, and this map are the whole feature.
+Architecture and invariants for the modular C++17 / OpenGL 3.3 water caustics simulator.
 
-## Decision
+## Module Architecture
 
-The caustic pass projects each water vertex to the floor along the refracted ray, then writes flux from how much water surface lands on each floor pixel. `shaders.h` owns that pair of shaders. `main.cpp` owns the ortho camera, the additive framebuffer, and the uploads.
+| Module | Files | Responsibility |
+| --- | --- | --- |
+| Pure Simulation | `src/sim/wave_sim.{h,cpp}` | 2D shallow-water heightfield solver (`WaveSim`, `BoundaryMode`, `WindParams`). Zero OpenGL/GLFW/GLM dependencies. |
+| Coordinate & Optics SSOT | `src/render/pool_coords.h`, `src/render/pool_optics.h` | Exact grid/world/UV mapping (`PoolConfig`), ray-pool-box intersection, 5-face unfolded caustic atlas UV mapping, analytical rim shadow occlusion. |
+| Render State & Shaders | `src/render/scene_state.h`, `src/render/shader_program.{h,cpp}`, `src/render/shaders/*.h` | Shared POD structs (`LightConfig`, `RenderSettings`, `SceneTargets`, `CameraState`), cached uniform shader wrapper, modular GLSL sources (`common_height.h`, `caustics_shaders.h`, `pool_shaders.h`, `water_shaders.h`, `skybox_shaders.h`, `overlay_shaders.h`). |
+| Caustics Pass | `src/render/caustics_pass.{h,cpp}` | R32F height texture upload, 5-face unfolded caustic FBO (`GL_RGB16F`/`GL_RGBA16F`), crisp separable blur. |
+| Pool Renderer | `src/render/pool_renderer.{h,cpp}` | Floor + 4 vertical walls with true inward normals, CCW inward winding, dynamic waterline, submerged caustics, dry stone shading, rim shadows. |
+| Water Renderer | `src/render/water_renderer.{h,cpp}` | Water mesh (`[-hw, +hw] x [-hh, +hh]`), analytical Catmull-Rom normals, capillary wall meniscus, real camera-ray underwater refraction (via `SceneTargets`), Beer-Lambert absorption, Fresnel sky + pool-wall reflections. |
+| Skybox Renderer | `src/render/skybox_renderer.{h,cpp}` | Sky gradient background pass. |
+| Camera & HUD | `src/ui/camera.{h,cpp}`, `src/ui/overlay_ui.{h,cpp}` | Orbit/pan/zoom camera with presets 1-4; single-draw-call batched overlay UI and 5x7 bitmap font. |
+| Application | `src/app.{h,cpp}`, `main.cpp` | GLFW lifecycle, HiDPI/resize handling, offscreen `SceneTargets` FBO, CLI flags, BMP capture, fixed-timestep loop. |
 
-The previous fragment shader kept `gl_Position` on the water surface and stored `length(T.xy)`. That paints a soft blob under the wave. A vertex bend without the area ratio was reverted because it looked worse than the area-ratio rings.
+## Pool Coordinates (`src/render/pool_coords.h`)
 
-Rejected alternative. Write `1/|det d(hit)/d(x,y)|` into the texel under the surface point. The energy is then still in the wrong place.
+`PoolConfig` is the single source of truth shared across CPU geometry, raycasting, and GPU height sampling:
 
-## Locked scene
-
-| Name | Value |
+| Field / Method | Default / Formula |
 | --- | --- |
-| Grid `width`, `height` | 400, 400 |
-| `waterScale` | 1 |
-| Pool half-extent | `(width / 2) * waterScale` = 200 |
-| Pool XY | [-200, 200] |
-| `BOTTOM_Z` | -30 |
-| `WATER_IOR`, `AIR_IOR` | 1.33, 1.0 |
-| `CAUSTICS_RES` | 2048 |
-| Light position | (0, 0, 100) |
-| Mesh height | `height_current * 8` |
-| Mesh slope | Visible slope is the Catmull-Rom height at plus and minus 8 world units, times `heightScale`. Caustic optical slope stays at plus and minus 0.5 world units |
+| `gridW`, `gridH` | `400`, `400` (supports rectangular pools) |
+| `waterScale` | `1.0f` |
+| `halfWidth()`, `halfHeight()` | `0.5f * gridW * waterScale` (`200.0f`), `0.5f * gridH * waterScale` (`200.0f`) |
+| `bottomZ`, `lipZ` | `-30.0f`, `18.0f` (wall height `H = lipZ - bottomZ = 48.0f`) |
+| `meshHeightScale` | `8.0f` |
+| `gridToWorldX(gx)` | `-hw + (gx / float(gridW - 1)) * (2.0f * hw)` |
+| `worldToGridX(x)` | `((x + hw) / (2.0f * hw)) * float(gridW - 1)` |
+| `worldToUV(x, y)` | `((x + hw) / (2.0f * hw), (y + hh) / (2.0f * hh))` |
 
-Do not change `dx`, `dt`, `c`, `damping`, `width`, or `height`. Do not remove the height scale of 8.
+This bijection maps `gx = 0` to `-hw` and `gx = gridW - 1` to `+hw` identically on both axes, eliminating the legacy 1-unit east/north water-wall gap and `+200` texel overshoot.
 
-Wave step, unchanged:
+## Height Storage & Wave Solver (`src/sim/wave_sim.{h,cpp}`)
 
-```
+- **Storage layout**: Canonical row-major flat vectors (`height_current`, `height_prev`, `height_next`) indexed by `idx(x, y) = y * width + x`. Uploaded directly as a `width x height` `GL_R32F` texture with zero X/Y transposition.
+- **Velocity-damped wave update** (CFL-safe default `dx = 1.0f`, `c = 1.0f`, `dt = 0.5f`, `r = c * dt / dx = 0.5 <= 0.7071`, `damping = 0.01f`):
+
+```text
 laplacian = E + W + N + S - 4 * C
-height_next = (1 - damping) * (2 * C - P) + (c * c * dt * dt / (dx * dx)) * laplacian
+height_next[i] = C + (1 - damping) * (C - P) + (c * dt / dx)^2 * laplacian
 ```
 
-The loop writes the interior only, cells `1 .. n-2`. The border of `height_next` stays 0. Then copy `height_prev = height_current` and `height_current = height_next`. Do not swap. A swap keeps stale border cells.
+- **Buffer rotation**: Every cell (interior, edges, and corners) is written into `height_next` each step, allowing O(1) three-buffer `std::swap` rotation.
+- **Boundary modes (`BoundaryMode`)**:
+  - `ReflectiveNeumann` (default): 2nd-order symmetric ghost-cell Laplacian (`h(-1, y) = h(1, y)`, etc.) on all 4 edges and corners. Preserves in-phase (+1) wave reflection with ~2x wall run-up, diagonal corner symmetry, and strict trapezoidal-weighted volume conservation when `damping == 0`.
+  - `PartialAbsorbRobin`: Neumann stencil with perimeter dissipation controlled by `wallReflection` in `[0, 1]`. Attenuates reflected energy without inverting wave phase.
+  - `AbsorbingOpen`: 1st-order Mur absorbing boundary condition with corner averaging plus a cosine-tapered sponge damping layer to absorb outgoing waves (>85% energy exit).
+  - `FixedDirichlet`: Legacy pinned zero boundary (`height_next = 0` on border).
+- **Splashes & wind**: `addDisturbance(x, y, amplitude, radius)` defaults to a smooth additive Gaussian kernel (`radius = 4.0f`, single-cell additive impulse when `radius <= 0.5f`) that mirror-folds near reflective walls and initializes zero vertical velocity (`height_current` and `height_prev`) to preserve volume without step-1 overshoot. `applyWind(simTime, wind)` drives multi-directional traveling wind waves smoothly across the domain.
+- **Helpers**: `reset()`, `totalVolume()`, `totalEnergy()`, and `stepFixed(deltaSeconds, accumulator, maxSubsteps)`.
 
-## Height storage
+## Analytical Height Derivatives & 5-Face Unfolded Caustic Atlas
 
-Flat row-major `std::vector<float>`. Index is `x * height + y`.
+### Analytical Catmull-Rom Derivatives (`common_height.h`, `water_shaders.h`)
 
-```
-std::vector<float> height_current;
-std::vector<float> height_prev;
-std::vector<float> height_next;
-```
+`sampleHeightAndGrad(vec2 xy, out float h, out vec2 grad)` evaluates both interpolated height `h` and exact analytical world gradient `(dh/dx, dh/dy)` in a single 4x4 (16-tap) Catmull-Rom window, scaling index derivatives by `(gridSize - 1.0) / (poolHalfExtent * 2.0)`. `sampleHeight` and `heightSlope` remain available for compatibility.
 
-`init_grid` resizes all three to `width * height` and sets every cell to 0. `add_disturbance` keeps the same border rejection and writes one cell. `verify/wave_stability.cpp` uses this layout. The scenarios, ceilings, and linearity test stay as they are.
+### Ray-Pool-Box Intersection & Unfolded Cross Atlas (`pool_optics.h`, `caustics_pass.*`, `caustics_shaders.h`)
 
-## Mesh
+Refracted rays from the water surface (`airIOR = 1.0`, `waterIOR = 1.33`, optional RGB chromatic dispersion via `settings.dispersion`) are intersected against the 5 interior faces of the pool box (`[-hw, +hw] x [-hh, +hh] x [bottomZ, lipZ]`):
 
-`buildWaterMesh` runs once. The simulation index stays `x * height + y`. The drawn mesh uses `meshSubdiv` 2, so each axis has `(n - 1) * 2 + 1` vertices. Vertex id on that mesh is `i * axisY + j`. The buffer stores world xy and z = 0. Two triangles per fine cell. Both buffers are `GL_STATIC_DRAW`. The shader samples height and slope from `heightTex`.
+- Face `0`: Floor (`z = bottomZ`, normal `(0, 0, +1)`) -> unfolded `(x, y)`
+- Face `1`: South wall (`y = -hh`, normal `(0, +1, 0)`) -> unfolded `(x, -hh - (z - bottomZ))`
+- Face `2`: East wall (`x = +hw`, normal `(-1, 0, 0)`) -> unfolded `(+hw + (z - bottomZ), y)`
+- Face `3`: North wall (`y = +hh`, normal `(0, -1, 0)`) -> unfolded `(x, +hh + (z - bottomZ))`
+- Face `4`: West wall (`x = -hw`, normal `(+1, 0, 0)`) -> unfolded `(-hw - (z - bottomZ), y)`
 
-## Framebuffer and UV
+With wall height `H = lipZ - bottomZ`, unfolded coordinates map linearly into `[0, 1]^2`:
 
-`setupCausticsFBO` creates two `GL_RGBA32F` textures at `CAUSTICS_RES`, with a linear filter and clamp-to-edge. `causticsFBO` holds the light map. `causticsBlurFBO` holds the horizontal blur. Color attachment 0 is cleared to 0. The light map is cleared again every frame before the mesh draw.
-
-Caustic camera, every frame:
-
-```
-extent = (width / 2) * waterScale
-view = lookAt((0, 0, 80), (0, 0, 0), (0, 1, 0))
-projection = ortho(-extent, extent, -extent, extent, 0.1, 300)
-```
-
-Draw the water mesh into `causticsFBO` with depth off and `glBlendFunc(GL_ONE, GL_ONE)`. `blurCausticMap` then turns blending off and draws a fullscreen triangle twice. The horizontal pass reads `causticsTexture` and writes `causticsBlurTexture`. The vertical pass reads `causticsBlurTexture` and writes `causticsTexture`. Each pass is a normalized Gaussian with sigma 6 texels and offsets from -18 to 18. `direction` is `(1/CAUSTICS_RES, 0)`, then `(0, 1/CAUSTICS_RES)`. The shader forms the sample coordinate as `gl_FragCoord.xy` times the texel size in `direction`. The render loop then restores the window viewport.
-
-Floor sample:
-
-```
-causticsUV = (FragPos.xy + vec2(poolExtent)) / (poolExtent * 2.0)
-light = texture(causticsTexture, causticsUV).r
+```text
+uv = (unfolded + vec2(hw + H, hh + H)) / vec2(2 * hw + 2 * H, 2 * hh + 2 * H)
 ```
 
-UV (0, 0) is world (-200, -200). UV (1, 1) is world (200, 200). The ortho projection uses the same square, so a floor hit and a floor sample name the same texel.
+Because each wall strip attaches directly along its shared floor edge at `z = bottomZ`, floor-to-wall caustic projection is continuous across all four floor-wall creases. Wall-to-wall corner seam triangles are discarded to prevent stretched artifacts. Flux is computed from fragment area ratios (`dFdx`/`dFdy`), weighted by Fresnel transmittance and incident cosine, accumulated into a 16-bit floating-point FBO (`GL_RGB16F`/`GL_RGBA16F`), and filtered with a tight crisp separable Gaussian blur.
 
-## Who owns which shader
+### Analytical Rim Shadows (`pool_optics.h`, `caustics_shaders.h`, `pool_shaders.h`)
 
-| Program | Vertex | Fragment |
+A ray from surface point `P` toward `lightPos` is tested against the four wall planes `x = ±hw`, `y = ±hh`. If it exits the pool footprint at `z_exit < lipZ` before reaching the light (`t < 1`), the point is shadowed by the pool rim (with a smooth penumbra band near `z_exit ≈ lipZ`). Rim occlusion gates both caustic injection and direct lighting.
+
+## Dynamic Waterline, Pool Shading & Water Surface Realism
+
+- **Pool walls (`pool_shaders.h`)**: Every wall fragment samples live `waterZ = sampleHeight(clampedWallXY) * heightScale`:
+  - Submerged (`FragPos.z < waterZ`): samples wall caustics from the 5-face unfolded atlas, applies wet stone darkening, Beer-Lambert depth tint, and corner ambient occlusion.
+  - Waterline meniscus (`abs(FragPos.z - waterZ)` near 0): subtle wet specular contact highlight tracking moving waves.
+  - Dry wall (`FragPos.z >= waterZ`): dry masonry Lambertian shading with rim shadows and zero caustic bleed.
+- **Water surface (`water_renderer.*`, `water_shaders.h`)**:
+  - Covers `[-hw, +hw] x [-hh, +hh]` seamlessly (watertight perimeter overlap/skirt so sloshing waves never expose sky gaps).
+  - Applies a subtle capillary meniscus normal curve within ~2.5 world units of each wall.
+  - When `SceneTargets` (`colorTex` + `depthTex` rendered offscreen in `App`) is provided, traces transmitted refracted rays into the pool box, projects underwater hits to screen UV with depth-buffer validation (preventing dry-wall foreground bleed), supports optional RGB dispersion, applies Beer-Lambert depth absorption, and reflects above-water dry pool walls or sky via Schlick Fresnel. Falls back cleanly to translucent shading when `SceneTargets` is null.
+
+## Interactive Controls & CLI
+
+- **Camera**: Right-drag orbit, Middle-drag / Shift+Right-drag pan, Scroll zoom, Presets `1` (Top-down), `2` (Classic oblique), `3` (Low corner inspection), `4` (Grazing side view).
+- **Lighting & Sim**: `L` + Left-drag moves light; `Space` pause/resume; `R` reset water; `B` cycle boundary mode; `H` toggle HUD; `Escape` quit. Left-click on water adds a smooth drop.
+- **HUD**: Single-draw-call batched overlay anchored in logical pixels (HiDPI/resize-safe) with `AMP`, `SCALE`, `TEMPO`, `REFLECT`, `LIGHT EL`, `LIGHT AZ`, `DISP` sliders and a clickable Boundary Mode button.
+- **CLI flags**:
+  - `--dump <path.bmp> [frames]` (default 180 frames; deterministic 1 sim step/frame; disables vsync for fast capture)
+  - `--wind <amp> <wavelength> <tempo>`
+  - `--drop <gx> <gy> <amp> <frame>`
+  - `--camera <ex> <ey> <ez> <tx> <ty> <tz>`
+  - `--preset <1|2|3|4>`
+  - `--light <x> <y> <z>`
+  - `--boundary <reflective|robin|absorb|dirichlet>`
+  - `--dispersion <val>`
+  - `--no-ui`
+
+## Verification Suite
+
+| Check | Command | Coverage |
 | --- | --- | --- |
-| Water | `surfaceVertexShaderSource` | `waterFragmentShaderSource` |
-| Floor | `bottomVertexShaderSource` | `bottomFragmentShaderSource` |
-| Caustics | `causticVertexShaderSource` | `causticsFragmentShaderSource` |
-| Caustic blur | `causticBlurVertexShaderSource` | `causticBlurFragmentShaderSource` |
-| Sky | `skyboxVertexShaderSource` | `skyboxFragmentShaderSource` |
-| Overlay | `overlayVertexShaderSource` | `overlayFragmentShaderSource` |
-
-`surfaceVertexShaderSource` samples height with Catmull-Rom and outputs `FragPos` and `Normal`. The visible slope is that curve at plus and minus 8 world units. Water uses it. The caustic slope stays at plus and minus 0.5 world units. The floor uses `bottomVertexShaderSource`, which is only the model-view-projection transform. The caustic pass uses `causticVertexShaderSource`.
-
-`main` compiles the caustic program from `causticVertexShaderSource` and `causticsFragmentShaderSource`. It compiles the blur program from `causticBlurVertexShaderSource` and `causticBlurFragmentShaderSource`. The floor uses `bottomVertexShaderSource` and `bottomFragmentShaderSource`. The floor fetches the blurred map once.
-
-## Caustic uniforms
-
-`main` uploads these on the caustic program. The caustic shaders read them.
-
-| Uniform | Type | Value |
-| --- | --- | --- |
-| `model` | mat4 | identity |
-| `view` | mat4 | caustic `lookAt` above |
-| `projection` | mat4 | caustic `ortho` above |
-| `lightPos` | vec3 | (0, 0, 100) |
-| `bottomZ` | float | `BOTTOM_Z` |
-| `waterIOR` | float | 1.33 |
-| `airIOR` | float | 1.0 |
-| `heightScale` | float | `meshHeightScale` (8) |
-| `poolExtent` | float | `(width / 2) * waterScale` |
-| `meshSpacing` | float | world distance between drawn water vertices |
-
-`main` uploads `heightScale`, `poolExtent`, `gridSize`, and `heightTex` on texture unit 1. `poolExtent` is `(width / 2) * waterScale`. The height texture is R32F, one float per cell, updated with `glTexSubImage2D` after each wave step. There is no geometry shader, no `time` uniform, and no `receiverTexel` uniform.
-
-The blur program reads `source` on texture unit 0 and `direction`. The horizontal pass sets `direction` to `(1/CAUSTICS_RES, 0)`. The vertical pass sets `direction` to `(0, 1/CAUSTICS_RES)`.
-
-Beauty pass uploads:
-
-- Floor reads `model`, `view`, `projection`, `causticsTexture` on texture unit 0, `poolExtent`, and `bottomZ`.
-- Water reads `model`, `view`, `projection`, `lightPos`, `viewPos`, `heightScale`, `poolExtent`, `gridSize`, and `heightTex` on texture unit 1.
-- Sky reads `view` with translation removed, and `projection`.
-
-Camera for the beauty pass stays `lookAt((90, -120, 95), (0, 0, -10), (0, 0, 1))`, perspective 50 degrees, aspect `SCR_WIDTH / SCR_HEIGHT`, near 0.1, far 800.
-
-## Caustic vertex shader
-
-The mesh stores world xy. The shader samples `heightTex` with Catmull-Rom. The optical normal is `normalize(vec3(-dhdx, -dhdy, 1))` from that curve at plus and minus 0.5 world units. The visible water normal uses the same curve at plus and minus 8 world units, then multiplies that slope by `heightScale`. The Jacobian step is `meshSpacing`.
-
-The ray starts at the simulated height, not the exaggerated mesh height. `gl_Position` is the floor hit. Intensity is a smooth varying.
-
-```
-receiver = abs(cross(hit(x+dx) - hit, hit(y+dy) - hit))
-intensity = clamp(dx * dy / max(receiver, 0.0001), 0.0, 4.0)
-```
-
-On flat water, intensity is about 1. Where neighboring rays land closer together, intensity rises. The Gaussian blur then spreads each sample by sigma 6 texels, about 1.17 world units on the 400-unit pool. The Snell hit and the area ratio stay in the vertex shader.
-
-## Caustic fragment shader
-
-```
-FragColor = vec4(intensity)
-```
-
-## Floor and water
-
-Floor tiles are 25 world units. Tile A is `vec3(0.62, 0.70, 0.66)`. Tile B is `vec3(0.33, 0.50, 0.52)`. Grout is `vec3(0.16, 0.22, 0.24)`, about 0.06 of the tile. The light-map sample is tonemapped before it multiplies the tile.
-
-```
-tone = light / (1.0 + 0.85 * max(light - 0.65, 0.0))
-color = albedo * (0.42 + 1.15 * tone)
-FragColor = vec4(clamp(color, 0.0, 1.0), 1.0)
-```
-
-Four walls share the floor mesh and the floor program. Wall z runs from `BOTTOM_Z` to 18. When `FragPos.z` is above `bottomZ + 0.5`, the fragment shades a stone band and does not sample caustics. The sky gradient is still drawn first, with depth off, as the background. This GLAD has no `glDepthFunc`.
-
-Water stays a Fresnel mix of `vec3(0.03, 0.28, 0.36)` and `vec3(0.40, 0.66, 0.78)`, specular power 48, alpha from 0.28 to 0.52. The floor must stay visible through it.
-
-## Click
-
-A left click outside the slider panel unprojects the cursor with the beauty camera and the framebuffer size, hits the plane `z = 0`, then
-
-```
-gridX = hit.x / waterScale + width / 2
-gridY = hit.y / waterScale + height / 2
-```
-
-`add_disturbance(gridX, gridY, 5.0)` when the indices are inside the grid. A click on the panel drags a slider and does not add a drop. Escape still closes the window.
-
-## Dump
-
-`main` accepts `caustics.exe --dump <path.bmp> <frames>`. After that many frames, read the window framebuffer, write a 24-bit BMP, and exit. Default frames if the count is missing: 180. This is how the proof frame is captured.
-
-## Comments
-
-`shaders.h` and `main.cpp` contain no comments. This file holds the invariants.
+| Full C++ verification | `powershell -ExecutionPolicy Bypass -File verify/check.ps1` | Builds and runs `wave_stability`, `optics_tests`, and `boundary_tests` (`-SkipBoundary` optional). |
+| Wave stability | `verify/wave_stability.exe` | Row-major layout, CFL check, linearity, 400x400 scenarios, and 2^20 4x4 sweeps for both `FixedDirichlet` and `ReflectiveNeumann`. |
+| Boundary physics | `verify/boundary_tests.exe` | Neumann in-phase reflection & run-up, trapezoidal volume conservation (<1e-3), corner diagonal symmetry (<1e-5), Robin attenuation, AbsorbingOpen >85% energy exit, wall-adjacent drops across all 4 modes. |
+| Optics & coordinates | `verify/optics_tests.exe` | Square & rectangular `PoolConfig` bijection, `poolBoxHit` 5-face classification, floor-to-wall unfolded UV continuity, rim shadow occlusion. |
+| Floor ring check | `python verify/ring_band.py <frame.bmp> [--preset classic|topdown] [--eye ...] [--center ...] [--up ...] [--fov ...]` | Annulus caustic band connectivity and zero white clipping. |
+| Wall caustics check | `python verify/wall_caustics_check.py <frame.bmp> [--preset 3]` | Submerged wall 2D caustic contrast, dry wall cleanliness, zero white clipping, and zero water-wall seam sky bleed. |

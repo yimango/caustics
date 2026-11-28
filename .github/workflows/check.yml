@@ -32,11 +32,16 @@ jobs:
           Expand-Archive -Path $zip -DestinationPath $env:RUNNER_TEMP
           Copy-Item -Recurse (Join-Path $env:RUNNER_TEMP "glfw-3.4.bin.WIN64\lib-mingw-w64") "external\glfw-3.4.bin.WIN64\lib-mingw-w64"
 
-      - name: Wave check
+      - name: Verification suite
         shell: pwsh
         run: |
           $env:Path = "C:\msys64\mingw64\bin;" + $env:Path
           powershell -ExecutionPolicy Bypass -File verify/check.ps1
+
+      - name: Python verification script check
+        shell: pwsh
+        run: |
+          python -m py_compile verify/ring_band.py verify/wall_caustics_check.py
 
       - name: CMake build
         shell: pwsh
