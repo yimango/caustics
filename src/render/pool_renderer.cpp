@@ -50,7 +50,7 @@ bool PoolRenderer::init(const PoolConfig& pool) {
     std::vector<float> vertices;
     std::vector<unsigned int> indices;
 
-    // Floor (+Z normal)
+    // Floor: z = bottomZ, inward normal (0, 0, +1), CCW inward winding.
     appendVertex(vertices, -hw, -hh, bottomZ, 0.0f, 0.0f, 1.0f);
     appendVertex(vertices, hw, -hh, bottomZ, 0.0f, 0.0f, 1.0f);
     appendVertex(vertices, hw, hh, bottomZ, 0.0f, 0.0f, 1.0f);
@@ -58,36 +58,36 @@ bool PoolRenderer::init(const PoolConfig& pool) {
     appendQuad(indices, 0, 1, 2, 3);
     floorIndexCount_ = static_cast<int>(indices.size());
 
-    // South wall (+Y inward normal)
+    // South wall: y = -hh, inward normal (0, +1, 0), CCW inward winding.
     const unsigned int south = static_cast<unsigned int>(vertices.size() / 6);
     appendVertex(vertices, -hw, -hh, bottomZ, 0.0f, 1.0f, 0.0f);
-    appendVertex(vertices, hw, -hh, bottomZ, 0.0f, 1.0f, 0.0f);
-    appendVertex(vertices, hw, -hh, lipZ, 0.0f, 1.0f, 0.0f);
     appendVertex(vertices, -hw, -hh, lipZ, 0.0f, 1.0f, 0.0f);
+    appendVertex(vertices, hw, -hh, lipZ, 0.0f, 1.0f, 0.0f);
+    appendVertex(vertices, hw, -hh, bottomZ, 0.0f, 1.0f, 0.0f);
     appendQuad(indices, south, south + 1, south + 2, south + 3);
 
-    // East wall (-X inward normal)
+    // East wall: x = +hw, inward normal (-1, 0, 0), CCW inward winding.
     const unsigned int east = static_cast<unsigned int>(vertices.size() / 6);
     appendVertex(vertices, hw, -hh, bottomZ, -1.0f, 0.0f, 0.0f);
-    appendVertex(vertices, hw, hh, bottomZ, -1.0f, 0.0f, 0.0f);
-    appendVertex(vertices, hw, hh, lipZ, -1.0f, 0.0f, 0.0f);
     appendVertex(vertices, hw, -hh, lipZ, -1.0f, 0.0f, 0.0f);
+    appendVertex(vertices, hw, hh, lipZ, -1.0f, 0.0f, 0.0f);
+    appendVertex(vertices, hw, hh, bottomZ, -1.0f, 0.0f, 0.0f);
     appendQuad(indices, east, east + 1, east + 2, east + 3);
 
-    // North wall (-Y inward normal)
+    // North wall: y = +hh, inward normal (0, -1, 0), CCW inward winding.
     const unsigned int north = static_cast<unsigned int>(vertices.size() / 6);
     appendVertex(vertices, hw, hh, bottomZ, 0.0f, -1.0f, 0.0f);
-    appendVertex(vertices, -hw, hh, bottomZ, 0.0f, -1.0f, 0.0f);
-    appendVertex(vertices, -hw, hh, lipZ, 0.0f, -1.0f, 0.0f);
     appendVertex(vertices, hw, hh, lipZ, 0.0f, -1.0f, 0.0f);
+    appendVertex(vertices, -hw, hh, lipZ, 0.0f, -1.0f, 0.0f);
+    appendVertex(vertices, -hw, hh, bottomZ, 0.0f, -1.0f, 0.0f);
     appendQuad(indices, north, north + 1, north + 2, north + 3);
 
-    // West wall (+X inward normal)
+    // West wall: x = -hw, inward normal (+1, 0, 0), CCW inward winding.
     const unsigned int west = static_cast<unsigned int>(vertices.size() / 6);
     appendVertex(vertices, -hw, hh, bottomZ, 1.0f, 0.0f, 0.0f);
-    appendVertex(vertices, -hw, -hh, bottomZ, 1.0f, 0.0f, 0.0f);
-    appendVertex(vertices, -hw, -hh, lipZ, 1.0f, 0.0f, 0.0f);
     appendVertex(vertices, -hw, hh, lipZ, 1.0f, 0.0f, 0.0f);
+    appendVertex(vertices, -hw, -hh, lipZ, 1.0f, 0.0f, 0.0f);
+    appendVertex(vertices, -hw, -hh, bottomZ, 1.0f, 0.0f, 0.0f);
     appendQuad(indices, west, west + 1, west + 2, west + 3);
 
     totalIndexCount_ = static_cast<int>(indices.size());
@@ -130,25 +130,40 @@ void PoolRenderer::destroy() {
 
 void PoolRenderer::render(const CameraState& camera,
                           const PoolConfig& pool,
-                          const LightConfig& /*light*/,
-                          const RenderSettings& /*settings*/,
-                          unsigned int causticsTexture) const {
+                          const LightConfig& light,
+                          const RenderSettings& settings,
+                          unsigned int causticsTexture,
+                          unsigned int heightTexture) const {
     const glm::mat4 model(1.0f);
     shader_.use();
     shader_.setMat4("model", model);
     shader_.setMat4("view", camera.view);
     shader_.setMat4("projection", camera.projection);
     shader_.setInt("causticsTexture", 0);
+    shader_.setInt("heightTex", 1);
     shader_.setVec2("poolHalfExtent", pool.halfExtent());
+    shader_.setVec2("gridSize", glm::vec2(static_cast<float>(pool.gridW), static_cast<float>(pool.gridH)));
     shader_.setFloat("bottomZ", pool.bottomZ);
+    shader_.setFloat("lipZ", pool.lipZ);
+    shader_.setFloat("heightScale", pool.meshHeightScale);
+    shader_.setVec3("lightPos", light.position);
+    shader_.setVec3("lightColor", light.color * light.intensity);
+    shader_.setVec3("viewPos", camera.position);
+    shader_.setFloat("causticStrength", settings.causticStrength);
+    shader_.setFloat("turbidity", settings.turbidity);
+    shader_.setFloat("exposure", settings.exposure);
 
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, causticsTexture);
 
+    if (heightTexture != 0) {
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, heightTexture);
+    }
+
+    glEnable(GL_CULL_FACE);
+    glCullFace(GL_BACK);
     glBindVertexArray(vao_);
-    glDrawElements(GL_TRIANGLES, floorIndexCount_, GL_UNSIGNED_INT, nullptr);
-    glDrawElements(GL_TRIANGLES,
-                   totalIndexCount_ - floorIndexCount_,
-                   GL_UNSIGNED_INT,
-                   reinterpret_cast<void*>(static_cast<std::size_t>(floorIndexCount_) * sizeof(unsigned int)));
+    glDrawElements(GL_TRIANGLES, totalIndexCount_, GL_UNSIGNED_INT, nullptr);
+    glDisable(GL_CULL_FACE);
 }

@@ -15,7 +15,8 @@ public:
                 const PoolConfig& pool,
                 const LightConfig& light,
                 const RenderSettings& settings,
-                unsigned int causticsTexture) const;
+                unsigned int causticsTexture,
+                unsigned int heightTexture = 0) const;
 
 private:
     ShaderProgram shader_;
