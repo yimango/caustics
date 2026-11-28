@@ -420,7 +420,7 @@ inline constexpr const char* kWaterFragmentShader = R"GLSL(
 
         // Beer-Lambert absorption coefficients modulated by turbidity
         float safeTurbidity = max(turbidity, 0.0);
-        vec3 absorbCoeff = vec3(0.015, 0.0045, 0.003) * (1.0 + safeTurbidity * 2.5);
+        vec3 absorbCoeff = vec3(0.008, 0.0025, 0.0016) * (1.0 + safeTurbidity * 2.5);
         vec3 scatterTint = vec3(0.025, 0.16, 0.21) * lightColor * lightIntensity;
         float scatterStrength = clamp(0.18 + safeTurbidity * 0.35, 0.0, 0.65);
 

@@ -596,7 +596,7 @@ void App::onKey(int key, int /*scancode*/, int action, int /*mods*/) {
             paused_ = !paused_;
             break;
         case GLFW_KEY_R:
-            waveSim_.init(pool_.gridW, pool_.gridH);
+            waveSim_.reset();
             needHeightUpload_ = true;
             break;
         case GLFW_KEY_B:
@@ -749,7 +749,12 @@ int App::run() {
         glEnable(GL_DEPTH_TEST);
         glDepthMask(GL_TRUE);
 
-        poolRenderer_.render(camState, pool_, light_, settings_, causticsPass_.causticsTexture());
+        poolRenderer_.render(camState,
+                             pool_,
+                             light_,
+                             settings_,
+                             causticsPass_.causticsTexture(),
+                             causticsPass_.heightTexture());
 
         if (useSceneTargets) {
             glBindFramebuffer(GL_READ_FRAMEBUFFER, sceneTargets_.fbo);

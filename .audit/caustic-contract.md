@@ -36,7 +36,7 @@ This bijection maps `gx = 0` to `-hw` and `gx = gridW - 1` to `+hw` identically 
 ## Height Storage & Wave Solver (`src/sim/wave_sim.{h,cpp}`)
 
 - **Storage layout**: Canonical row-major flat vectors (`height_current`, `height_prev`, `height_next`) indexed by `idx(x, y) = y * width + x`. Uploaded directly as a `width x height` `GL_R32F` texture with zero X/Y transposition.
-- **Velocity-damped wave update** (CFL-safe default `dx = 1.0f`, `c = 1.0f`, `dt = 0.5f`, `r = c * dt / dx = 0.5 <= 0.7071`, `damping = 0.008f`):
+- **Velocity-damped wave update** (CFL-safe default `dx = 1.0f`, `c = 1.0f`, `dt = 0.5f`, `r = c * dt / dx = 0.5 <= 0.7071`, `damping = 0.01f`):
 
 ```text
 laplacian = E + W + N + S - 4 * C

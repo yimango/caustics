@@ -64,7 +64,7 @@ inline constexpr const char* kPoolFragmentShader = R"(
         vec3 V = normalize(viewPos - FragPos);
         float ndotl = max(dot(N, L), 0.0);
         float rimVis = rimVisibility(FragPos, lightPos, poolHalfExtent, lipZ, 1.5);
-        vec3 kAbs = vec3(0.010, 0.0032, 0.0022) * (1.0 + 1.5 * turbidity);
+        vec3 kAbs = vec3(0.005, 0.0016, 0.0010) * (1.0 + 1.5 * turbidity);
 
         if (N.z > 0.5) {
             vec2 causticsUV = poolPointToAtlasUV(FragPos, POOL_FACE_FLOOR, poolHalfExtent, bottomZ, lipZ);
@@ -73,10 +73,10 @@ inline constexpr const char* kPoolFragmentShader = R"(
             vec2 tile = FragPos.xy / 25.0;
             vec2 cell = fract(tile);
             vec2 fw = max(fwidth(tile), vec2(0.002));
-            float gx = smoothstep(0.06 - fw.x, 0.06 + fw.x, cell.x) *
-                       smoothstep(0.06 - fw.x, 0.06 + fw.x, 1.0 - cell.x);
-            float gy = smoothstep(0.06 - fw.y, 0.06 + fw.y, cell.y) *
-                       smoothstep(0.06 - fw.y, 0.06 + fw.y, 1.0 - cell.y);
+            float gx = smoothstep(0.025 - fw.x, 0.025 + fw.x, cell.x) *
+                       smoothstep(0.025 - fw.x, 0.025 + fw.x, 1.0 - cell.x);
+            float gy = smoothstep(0.025 - fw.y, 0.025 + fw.y, cell.y) *
+                       smoothstep(0.025 - fw.y, 0.025 + fw.y, 1.0 - cell.y);
             float tileMask = gx * gy;
 
             vec3 albedo = vec3(0.62, 0.70, 0.66);
