@@ -26,6 +26,7 @@ public:
     void setPositionTarget(const glm::vec3& position,
                            const glm::vec3& target,
                            const glm::vec3& up = glm::vec3(0.0f, 0.0f, 1.0f));
+    void setPositionTargetAutoUp(const glm::vec3& position, const glm::vec3& target);
     void setFov(float fovDegrees);
 
     glm::vec3 position() const;
@@ -52,5 +53,5 @@ private:
     float distance_ = 535.677f;
     float fovDegrees_ = 50.0f;
     float nearPlane_ = 0.1f;
-    float farPlane_ = 800.0f;
+    float farPlane_ = 1600.0f;
 };
