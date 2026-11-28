@@ -1,22 +1,11 @@
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <iostream>
 #include <string>
 #include <vector>
 
-extern int width;
-extern int height;
-extern float dx;
-extern float dt;
-extern float c;
-extern float damping;
-extern std::vector<float> height_current;
-extern std::vector<float> height_prev;
-extern std::vector<float> height_next;
-
-void update_wave();
-void add_disturbance(int x, int y, float height);
-void init_grid();
+#include "sim/wave_sim.h"
 
 static const int kCornerSteps = 200;
 static const float kCornerPeakCeiling = 4.0f;
@@ -33,32 +22,19 @@ static void fail(const std::string& message) {
     ++failures;
 }
 
-static int idx(int x, int y) {
-    return x * height + y;
-}
-
-static void use_grid(int n) {
-    width = n;
-    height = n;
-    const std::size_t cells = static_cast<std::size_t>(n) * static_cast<std::size_t>(n);
-    height_current.assign(cells, 0.0f);
-    height_prev.assign(cells, 0.0f);
-    height_next.assign(cells, 0.0f);
-}
-
-static void zero_grids() {
-    const int cells = width * height;
+static void zero_grids(WaveSim& sim) {
+    const int cells = sim.width * sim.height;
     for (int i = 0; i < cells; ++i) {
-        height_current[i] = 0.0f;
-        height_prev[i] = 0.0f;
-        height_next[i] = 0.0f;
+        sim.height_current[i] = 0.0f;
+        sim.height_prev[i] = 0.0f;
+        sim.height_next[i] = 0.0f;
     }
 }
 
-static bool finite_grids() {
-    const int cells = width * height;
+static bool finite_grids(const WaveSim& sim) {
+    const int cells = sim.width * sim.height;
     for (int i = 0; i < cells; ++i) {
-        if (!std::isfinite(height_current[i]) || !std::isfinite(height_prev[i])) {
+        if (!std::isfinite(sim.height_current[i]) || !std::isfinite(sim.height_prev[i])) {
             return false;
         }
     }
@@ -67,96 +43,111 @@ static bool finite_grids() {
 
 struct Cell {
     float value;
-    int i;
-    int j;
+    int x;
+    int y;
 };
 
-static Cell tallest() {
+static Cell tallest(const WaveSim& sim) {
     Cell best{0.0f, 0, 0};
-    for (int i = 0; i < width; ++i) {
-        for (int j = 0; j < height; ++j) {
-            float value = std::fabs(height_current[idx(i, j)]);
-            if (value > std::fabs(best.value)) {
-                best.value = height_current[idx(i, j)];
-                best.i = i;
-                best.j = j;
+    for (int y = 0; y < sim.height; ++y) {
+        for (int x = 0; x < sim.width; ++x) {
+            const float raw = sim.height_current[sim.idx(x, y)];
+            const float mag = std::fabs(raw);
+            if (mag > std::fabs(best.value)) {
+                best.value = raw;
+                best.x = x;
+                best.y = y;
             }
         }
     }
     return best;
 }
 
-static void load_corner(std::uint32_t mask) {
-    zero_grids();
-    for (int i = 0; i < 4; ++i) {
-        for (int j = 0; j < 4; ++j) {
-            int bit = i * 4 + j;
-            height_current[idx(i, j)] = (mask & (1u << bit)) ? 1.0f : -1.0f;
+static void load_corner(WaveSim& sim, std::uint32_t mask) {
+    zero_grids(sim);
+    for (int x = 0; x < 4; ++x) {
+        for (int y = 0; y < 4; ++y) {
+            const int bit = x * 4 + y;
+            sim.height_current[sim.idx(x, y)] = (mask & (1u << bit)) ? 1.0f : -1.0f;
         }
     }
     const int interior[4][2] = {{1, 1}, {1, 2}, {2, 1}, {2, 2}};
     for (int k = 0; k < 4; ++k) {
-        height_prev[idx(interior[k][0], interior[k][1])] =
+        sim.height_prev[sim.idx(interior[k][0], interior[k][1])] =
             (mask & (1u << (16 + k))) ? 1.0f : -1.0f;
     }
 }
 
 static bool close_enough(float a, float b) {
-    float scale = std::max(1.0f, std::max(std::fabs(a), std::fabs(b)));
+    const float scale = std::max(1.0f, std::max(std::fabs(a), std::fabs(b)));
     return std::fabs(a - b) <= 1e-4f * scale;
 }
 
 static void check_linear() {
-    use_grid(4);
-    load_corner(0x000abcdeu);
-    std::vector<float> a_cur = height_current;
-    std::vector<float> a_prev = height_prev;
-    update_wave();
-    std::vector<float> out_a = height_current;
+    WaveSim sim;
+    sim.init(4, 4);
 
-    load_corner(0x00054321u);
-    std::vector<float> b_cur = height_current;
-    std::vector<float> b_prev = height_prev;
-    update_wave();
-    std::vector<float> out_b = height_current;
+    load_corner(sim, 0x000abcdeu);
+    const std::vector<float> a_cur = sim.height_current;
+    const std::vector<float> a_prev = sim.height_prev;
+    sim.step();
+    const std::vector<float> out_a = sim.height_current;
 
-    zero_grids();
-    for (int i = 0; i < 4; ++i) {
-        for (int j = 0; j < 4; ++j) {
-            height_current[idx(i, j)] = a_cur[idx(i, j)] + b_cur[idx(i, j)];
-            height_prev[idx(i, j)] = a_prev[idx(i, j)] + b_prev[idx(i, j)];
+    load_corner(sim, 0x00054321u);
+    const std::vector<float> b_cur = sim.height_current;
+    const std::vector<float> b_prev = sim.height_prev;
+    sim.step();
+    const std::vector<float> out_b = sim.height_current;
+
+    zero_grids(sim);
+    for (int y = 0; y < 4; ++y) {
+        for (int x = 0; x < 4; ++x) {
+            const int i = sim.idx(x, y);
+            sim.height_current[i] = a_cur[i] + b_cur[i];
+            sim.height_prev[i] = a_prev[i] + b_prev[i];
         }
     }
-    update_wave();
-    std::vector<float> out_sum = height_current;
+    sim.step();
+    const std::vector<float> out_sum = sim.height_current;
 
     bool linear = true;
-    for (int i = 0; i < 4; ++i) {
-        for (int j = 0; j < 4; ++j) {
-            if (!close_enough(out_sum[idx(i, j)], out_a[idx(i, j)] + out_b[idx(i, j)])) {
+    for (int y = 0; y < 4; ++y) {
+        for (int x = 0; x < 4; ++x) {
+            const int i = sim.idx(x, y);
+            if (!close_enough(out_sum[i], out_a[i] + out_b[i])) {
                 linear = false;
             }
         }
     }
     if (!linear) {
-        fail("update_wave is not linear, so the 4x4 corner sweep does not cover every surface in [-1, 1]");
+        fail("WaveSim::step is not linear, so the 4x4 corner sweep does not cover every surface in [-1, 1]");
     }
 
-    zero_grids();
-    update_wave();
-    for (int i = 0; i < 4; ++i) {
-        for (int j = 0; j < 4; ++j) {
-            if (height_current[idx(i, j)] != 0.0f) {
-                fail("update_wave moved a flat zero surface at cell (" + std::to_string(i) + "," +
-                     std::to_string(j) + ")");
+    zero_grids(sim);
+    sim.step();
+    for (int y = 0; y < 4; ++y) {
+        for (int x = 0; x < 4; ++x) {
+            if (sim.height_current[sim.idx(x, y)] != 0.0f) {
+                fail("WaveSim::step moved a flat zero surface at cell (" + std::to_string(x) + "," +
+                     std::to_string(y) + ")");
                 return;
             }
         }
     }
 }
 
+static void check_row_major_layout() {
+    WaveSim rect;
+    rect.init(10, 6);
+    rect.addDisturbance(7, 3, 2.5f);
+    if (rect.idx(7, 3) != 3 * 10 + 7 || rect.height_current[3 * 10 + 7] != 2.5f) {
+        fail("WaveSim storage is not canonical row-major (y * width + x)");
+    }
+}
+
 static void sweep_corners() {
-    use_grid(4);
+    WaveSim sim;
+    sim.init(4, 4);
     float worst_peak = 0.0f;
     float worst_final = 0.0f;
     std::uint32_t peak_mask = 0;
@@ -164,31 +155,31 @@ static void sweep_corners() {
     const std::uint32_t corners = 1u << 20;
 
     for (std::uint32_t mask = 0; mask < corners; ++mask) {
-        load_corner(mask);
+        load_corner(sim, mask);
         for (int step = 1; step <= kCornerSteps; ++step) {
-            update_wave();
-            if (!finite_grids()) {
-                Cell cell = tallest();
-                fail("4x4 corner mask " + std::to_string(mask) + " produced a non-finite height at update_wave step " +
-                     std::to_string(step) + " cell (" + std::to_string(cell.i) + "," + std::to_string(cell.j) + ")");
+            sim.step();
+            if (!finite_grids(sim)) {
+                const Cell cell = tallest(sim);
+                fail("4x4 corner mask " + std::to_string(mask) + " produced a non-finite height at step " +
+                     std::to_string(step) + " cell (" + std::to_string(cell.x) + "," + std::to_string(cell.y) + ")");
                 return;
             }
-            Cell cell = tallest();
-            float height = std::fabs(cell.value);
-            if (height > kCornerPeakCeiling) {
-                fail("4x4 corner mask " + std::to_string(mask) + ": after update_wave step " +
-                     std::to_string(step) + ", cell (" + std::to_string(cell.i) + "," + std::to_string(cell.j) +
+            const Cell cell = tallest(sim);
+            const float mag = std::fabs(cell.value);
+            if (mag > kCornerPeakCeiling) {
+                fail("4x4 corner mask " + std::to_string(mask) + ": after step " +
+                     std::to_string(step) + ", cell (" + std::to_string(cell.x) + "," + std::to_string(cell.y) +
                      ") height " + std::to_string(cell.value) + " is above the ceiling " +
                      std::to_string(kCornerPeakCeiling));
                 return;
             }
-            if (height > worst_peak) {
-                worst_peak = height;
+            if (mag > worst_peak) {
+                worst_peak = mag;
                 peak_mask = mask;
                 peak_step = step;
             }
         }
-        worst_final = std::max(worst_final, std::fabs(tallest().value));
+        worst_final = std::max(worst_final, std::fabs(tallest(sim).value));
     }
 
     if (worst_final > kCornerFinalCeiling) {
@@ -197,76 +188,76 @@ static void sweep_corners() {
         return;
     }
 
-    load_corner(peak_mask);
+    load_corner(sim, peak_mask);
     Cell witness{0.0f, 0, 0};
     for (int step = 1; step <= peak_step; ++step) {
-        update_wave();
-        witness = tallest();
+        sim.step();
+        witness = tallest(sim);
     }
     std::cout << "4x4 every surface in [-1, 1]: tallest height " << std::fabs(witness.value)
-              << " at step " << peak_step << " cell (" << witness.i << "," << witness.j
+              << " at step " << peak_step << " cell (" << witness.x << "," << witness.y
               << ") corner mask " << peak_mask << ". At step " << kCornerSteps << " the tallest was "
               << worst_final << ".\n";
 }
 
-static void run_pool(const char* name, void (*setup)(), float peak_ceiling) {
-    use_grid(400);
-    zero_grids();
-    setup();
-    float peak = std::fabs(tallest().value);
+static void run_pool(const char* name, void (*setup)(WaveSim&), float peak_ceiling) {
+    WaveSim sim;
+    sim.init(400, 400);
+    setup(sim);
+    float peak = std::fabs(tallest(sim).value);
     int peak_step = 0;
-    Cell peak_cell = tallest();
+    Cell peak_cell = tallest(sim);
     for (int step = 1; step <= kPoolSteps; ++step) {
-        update_wave();
-        if (!finite_grids()) {
-            Cell cell = tallest();
-            fail(std::string(name) + ": non-finite height after update_wave step " + std::to_string(step) +
-                 " cell (" + std::to_string(cell.i) + "," + std::to_string(cell.j) + ")");
+        sim.step();
+        if (!finite_grids(sim)) {
+            const Cell cell = tallest(sim);
+            fail(std::string(name) + ": non-finite height after step " + std::to_string(step) +
+                 " cell (" + std::to_string(cell.x) + "," + std::to_string(cell.y) + ")");
             return;
         }
-        Cell cell = tallest();
-        float height = std::fabs(cell.value);
-        if (height > peak_ceiling) {
-            fail(std::string(name) + ": after update_wave step " + std::to_string(step) + ", cell (" +
-                 std::to_string(cell.i) + "," + std::to_string(cell.j) + ") height " + std::to_string(cell.value) +
+        const Cell cell = tallest(sim);
+        const float mag = std::fabs(cell.value);
+        if (mag > peak_ceiling) {
+            fail(std::string(name) + ": after step " + std::to_string(step) + ", cell (" +
+                 std::to_string(cell.x) + "," + std::to_string(cell.y) + ") height " + std::to_string(cell.value) +
                  " is above the ceiling " + std::to_string(peak_ceiling));
             return;
         }
-        if (height > peak) {
-            peak = height;
+        if (mag > peak) {
+            peak = mag;
             peak_step = step;
             peak_cell = cell;
         }
     }
-    Cell final_cell = tallest();
+    const Cell final_cell = tallest(sim);
     if (std::fabs(final_cell.value) >= kSettledHeight) {
-        fail(std::string(name) + ": after update_wave step " + std::to_string(kPoolSteps) + ", cell (" +
-             std::to_string(final_cell.i) + "," + std::to_string(final_cell.j) + ") height " +
+        fail(std::string(name) + ": after step " + std::to_string(kPoolSteps) + ", cell (" +
+             std::to_string(final_cell.x) + "," + std::to_string(final_cell.y) + ") height " +
              std::to_string(final_cell.value) + " has not fallen below " + std::to_string(kSettledHeight));
         return;
     }
-    std::cout << name << ": peak height " << peak << " at step " << peak_step << " cell (" << peak_cell.i << ","
-              << peak_cell.j << "). At step " << kPoolSteps << " the tallest is " << final_cell.value << ".\n";
+    std::cout << name << ": peak height " << peak << " at step " << peak_step << " cell (" << peak_cell.x << ","
+              << peak_cell.y << "). At step " << kPoolSteps << " the tallest is " << final_cell.value << ".\n";
 }
 
-static void startup_splashes() {
-    init_grid();
-    add_disturbance(100, 100, 2.0f);
-    add_disturbance(300, 300, 1.5f);
-    add_disturbance(150, 250, 1.8f);
+static void startup_splashes(WaveSim& sim) {
+    sim.init(400, 400);
+    sim.addDisturbance(100, 100, 2.0f);
+    sim.addDisturbance(300, 300, 1.5f);
+    sim.addDisturbance(150, 250, 1.8f);
 }
 
-static void mouse_click() {
-    init_grid();
-    add_disturbance(200, 200, 5.0f);
+static void mouse_click(WaveSim& sim) {
+    sim.init(400, 400);
+    sim.addDisturbance(200, 200, 5.0f);
 }
 
-static void checkerboard() {
-    for (int i = 1; i < width - 1; ++i) {
-        for (int j = 1; j < height - 1; ++j) {
-            float sign = ((i + j) % 2 == 0) ? 1.0f : -1.0f;
-            height_current[idx(i, j)] = sign;
-            height_prev[idx(i, j)] = sign;
+static void checkerboard(WaveSim& sim) {
+    for (int y = 1; y < sim.height - 1; ++y) {
+        for (int x = 1; x < sim.width - 1; ++x) {
+            const float sign = ((x + y) % 2 == 0) ? 1.0f : -1.0f;
+            sim.height_current[sim.idx(x, y)] = sign;
+            sim.height_prev[sim.idx(x, y)] = sign;
         }
     }
 }
@@ -274,13 +265,18 @@ static void checkerboard() {
 int main() {
     std::cout << std::unitbuf;
     std::cerr << std::unitbuf;
-    if (width != 400 || height != 400) {
-        fail("main.cpp grid is " + std::to_string(width) + "x" + std::to_string(height) +
+
+    WaveSim defaults;
+    if (defaults.width != 400 || defaults.height != 400) {
+        fail("WaveSim default grid is " + std::to_string(defaults.width) + "x" + std::to_string(defaults.height) +
              ", not 400x400. The pool scenarios and ceilings no longer match the code.");
         return 1;
     }
 
-    std::cout << "parameters dx " << dx << " dt " << dt << " c " << c << " damping " << damping << "\n";
+    std::cout << "parameters dx " << defaults.dx << " dt " << defaults.dt
+              << " c " << defaults.c << " damping " << defaults.damping << "\n";
+
+    check_row_major_layout();
     check_linear();
     if (failures != 0) {
         std::cerr << "wave stability: FAIL\n";

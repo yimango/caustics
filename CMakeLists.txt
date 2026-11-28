@@ -6,15 +6,24 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(OpenGL REQUIRED)
 
-add_executable(caustics 
-    main.cpp 
+add_executable(caustics
+    main.cpp
     include/glad/glad.c
+    src/app.cpp
+    src/sim/wave_sim.cpp
+    src/render/shader_program.cpp
+    src/render/caustics_pass.cpp
+    src/render/pool_renderer.cpp
+    src/render/water_renderer.cpp
+    src/render/skybox_renderer.cpp
+    src/ui/camera.cpp
+    src/ui/overlay_ui.cpp
 )
 
 target_link_libraries(caustics PRIVATE OpenGL::GL)
 
 if(WIN32)
-    target_link_libraries(caustics PRIVATE 
+    target_link_libraries(caustics PRIVATE
         opengl32
         gdi32
         user32
@@ -22,14 +31,15 @@ if(WIN32)
     )
 endif()
 
-target_include_directories(caustics PRIVATE 
+target_include_directories(caustics PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/external/glm
 )
 
-find_library(GLFW_LIBRARY 
+find_library(GLFW_LIBRARY
     NAMES glfw3 glfw
-    PATHS 
+    PATHS
         ${CMAKE_CURRENT_SOURCE_DIR}/external/glfw-3.4.bin.WIN64/lib-mingw-w64
         ${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/installed/x64-windows/lib
         ${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/installed/x64-mingw-dynamic/lib
@@ -39,15 +49,15 @@ find_library(GLFW_LIBRARY
 if(GLFW_LIBRARY)
     message(STATUS "Found GLFW library: ${GLFW_LIBRARY}")
     target_link_libraries(caustics PRIVATE ${GLFW_LIBRARY})
-    
-    find_path(GLFW_INCLUDE_DIR 
+
+    find_path(GLFW_INCLUDE_DIR
         NAMES GLFW/glfw3.h
-        PATHS 
+        PATHS
             ${CMAKE_CURRENT_SOURCE_DIR}/external/glfw-3.4.bin.WIN64/include
             ${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/installed/x64-windows/include
             ${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/installed/x64-mingw-dynamic/include
     )
-    
+
     if(GLFW_INCLUDE_DIR)
         target_include_directories(caustics PRIVATE ${GLFW_INCLUDE_DIR})
     endif()
@@ -61,12 +71,12 @@ set_target_properties(caustics PROPERTIES
 
 if(WIN32 AND GLFW_LIBRARY)
     get_filename_component(GLFW_LIB_DIR ${GLFW_LIBRARY} DIRECTORY)
-    find_file(GLFW_DLL 
+    find_file(GLFW_DLL
         NAMES glfw3.dll
         PATHS ${GLFW_LIB_DIR}
         NO_DEFAULT_PATH
     )
-    
+
     if(GLFW_DLL)
         add_custom_command(TARGET caustics POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
