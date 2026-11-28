@@ -25,6 +25,8 @@ public:
     int axisY() const { return axisY_; }
 
 private:
+    static constexpr float kBorderOverlap = 0.05f;
+
     ShaderProgram shader_;
     unsigned int vao_ = 0;
     unsigned int vbo_ = 0;

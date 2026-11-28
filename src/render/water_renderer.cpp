@@ -1,6 +1,7 @@
 #include "render/water_renderer.h"
 
 #include <glad/glad.h>
+#include <glm/gtc/matrix_inverse.hpp>
 #include <cstddef>
 #include <vector>
 
@@ -21,14 +22,31 @@ bool WaterRenderer::init(const PoolConfig& pool, int meshSubdiv) {
     axisY_ = (pool.gridH - 1) * meshSubdiv + 1;
     meshSpacing_ = (axisX_ > 1) ? (2.0f * pool.halfWidth()) / static_cast<float>(axisX_ - 1) : pool.waterScale;
 
+    const float hw = pool.halfWidth();
+    const float hh = pool.halfHeight();
+
     std::vector<float> vertices(static_cast<std::size_t>(axisX_) * static_cast<std::size_t>(axisY_) * 3);
     std::size_t v = 0;
     for (int j = 0; j < axisY_; ++j) {
-        const float gy = static_cast<float>(j) * static_cast<float>(pool.gridH - 1) / static_cast<float>(axisY_ - 1);
-        const float wy = pool.gridToWorldY(gy);
+        float wy = 0.0f;
+        if (j == 0) {
+            wy = -hh;
+        } else if (j == axisY_ - 1) {
+            wy = hh;
+        } else {
+            const float gy = static_cast<float>(j) * static_cast<float>(pool.gridH - 1) / static_cast<float>(axisY_ - 1);
+            wy = pool.gridToWorldY(gy);
+        }
         for (int i = 0; i < axisX_; ++i) {
-            const float gx = static_cast<float>(i) * static_cast<float>(pool.gridW - 1) / static_cast<float>(axisX_ - 1);
-            const float wx = pool.gridToWorldX(gx);
+            float wx = 0.0f;
+            if (i == 0) {
+                wx = -hw;
+            } else if (i == axisX_ - 1) {
+                wx = hw;
+            } else {
+                const float gx = static_cast<float>(i) * static_cast<float>(pool.gridW - 1) / static_cast<float>(axisX_ - 1);
+                wx = pool.gridToWorldX(gx);
+            }
             vertices[v++] = wx;
             vertices[v++] = wy;
             vertices[v++] = 0.0f;
@@ -92,29 +110,73 @@ void WaterRenderer::destroy() {
 void WaterRenderer::render(const CameraState& camera,
                            const PoolConfig& pool,
                            const LightConfig& light,
-                           const RenderSettings& /*settings*/,
+                           const RenderSettings& settings,
                            unsigned int heightTexture,
-                           const SceneTargets* /*sceneTargets*/) const {
+                           const SceneTargets* sceneTargets) const {
     const glm::mat4 model(1.0f);
+    const glm::mat4 viewProj = camera.projection * camera.view;
+    const glm::mat4 invViewProj = glm::inverse(viewProj);
+    const bool hasScene = (sceneTargets != nullptr && sceneTargets->valid());
 
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    if (hasScene) {
+        glDisable(GL_BLEND);
+        glDepthMask(GL_TRUE);
+    } else {
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glDepthMask(GL_FALSE);
+    }
 
     shader_.use();
     shader_.setMat4("model", model);
     shader_.setMat4("view", camera.view);
     shader_.setMat4("projection", camera.projection);
+    shader_.setMat4("viewProj", viewProj);
+    shader_.setMat4("invViewProj", invViewProj);
+
     shader_.setVec3("lightPos", light.position);
+    shader_.setVec3("lightColor", light.color);
+    shader_.setFloat("lightIntensity", light.intensity);
     shader_.setVec3("viewPos", camera.position);
+    shader_.setVec2("nearFar", glm::vec2(camera.nearPlane, camera.farPlane));
+
     shader_.setFloat("heightScale", pool.meshHeightScale);
     shader_.setVec2("poolHalfExtent", pool.halfExtent());
     shader_.setVec2("gridSize", glm::vec2(static_cast<float>(pool.gridW), static_cast<float>(pool.gridH)));
-    shader_.setInt("heightTex", 1);
+    shader_.setFloat("bottomZ", pool.bottomZ);
+    shader_.setFloat("lipZ", pool.lipZ);
+    shader_.setFloat("borderOverlap", kBorderOverlap);
 
+    shader_.setFloat("waterIOR", settings.waterIOR);
+    shader_.setFloat("airIOR", settings.airIOR);
+    shader_.setFloat("dispersion", settings.dispersion);
+    shader_.setFloat("turbidity", settings.turbidity);
+    shader_.setFloat("exposure", settings.exposure);
+
+    shader_.setInt("heightTex", 1);
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, heightTexture);
 
+    shader_.setInt("hasSceneTargets", hasScene ? 1 : 0);
+    if (hasScene) {
+        shader_.setVec2("sceneResolution",
+                        glm::vec2(static_cast<float>(sceneTargets->width),
+                                  static_cast<float>(sceneTargets->height)));
+        shader_.setInt("sceneColorTex", 2);
+        shader_.setInt("sceneDepthTex", 3);
+
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, sceneTargets->colorTex);
+        glActiveTexture(GL_TEXTURE3);
+        glBindTexture(GL_TEXTURE_2D, sceneTargets->depthTex);
+    } else {
+        shader_.setVec2("sceneResolution", glm::vec2(1.0f, 1.0f));
+    }
+
     glBindVertexArray(vao_);
     glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(indexCount_), GL_UNSIGNED_INT, nullptr);
+
+    glDepthMask(GL_TRUE);
     glDisable(GL_BLEND);
+    glActiveTexture(GL_TEXTURE0);
 }
