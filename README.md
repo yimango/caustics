@@ -1,32 +1,104 @@
-# Water caustics
+# Water Caustics Simulator
 
-The pool is a 400 by 400 wave grid. The floor is a checker of 25-unit tiles with grout. Four walls run from z = -30 up to z = 18. They shade as stone, except a thin band at the floor that shows caustics. AMP, SCALE, and TEMPO sliders drive the wind. A click outside the panel adds a drop of height 5. Escape closes the window.
+Real-time C++17 / OpenGL 3.3 shallow-water wave and caustics simulator featuring physically-based boundary hydrodynamics, 5-face floor-and-wall caustics, analytical rim shadows, dynamic waterline shading, and camera-ray underwater refraction.
 
-The water mesh uses two vertices per simulation cell and stores world xy. Height comes from an R32F height texture, one float per cell. The drawn normal samples that Catmull-Rom height at plus and minus 8 world units. The caustic slope stays at plus and minus 0.5 world units.
+## Highlights
 
-Caustics follow Snell's law. One light sits at (0, 0, 100). There is no dispersion. `shaders.h` holds the shaders. The caustic pass sends each water vertex to the pool floor along the refracted ray and writes how much surface lands on each floor pixel. A separable Gaussian blur with sigma 6 texels spreads each sample on the 2048 light map. The floor reads that map once and shows it on the tiles.
+- **Modular architecture**: Pure C++17 wave simulation (`src/sim/wave_sim.{h,cpp}` with zero GL/GLFW/GLM dependencies), shared coordinate & optical geometry SSOT (`src/render/pool_coords.h`, `src/render/pool_optics.h`), modular OpenGL render passes (`src/render/*`), and interactive camera/HUD (`src/ui/*`, `src/app.*`).
+- **Hydrodynamic boundary physics**: Velocity-damped CFL-safe solver (`dt = 0.5`, canonical row-major `y * width + x`) supporting four selectable boundary modes:
+  - `ReflectiveNeumann` (rigid pool wall, in-phase reflection, ~2x wall run-up, volume conservation)
+  - `PartialAbsorbRobin` (tunable wall reflection / gutter dissipation)
+  - `AbsorbingOpen` (Mur absorbing boundary + sponge layer)
+  - `FixedDirichlet` (legacy pinned zero border)
+- **Floor + underwater wall caustics**: Exact ray-pool-box intersection projects refracted rays onto a continuous 5-face unfolded cross atlas (floor + South/East/North/West walls), with analytical Catmull-Rom derivatives, area-ratio flux, optional RGB chromatic dispersion, and analytical pool-rim sun shadows.
+- **Water surface & dynamic waterline**: Live wave height traces the wet/dry waterline and meniscus along all four walls; water shading performs analytical underwater refraction with depth-validated screen sampling, Beer-Lambert depth absorption, capillary wall meniscus normals, and Fresnel reflections of both sky and dry pool walls.
+
+## Interactive Controls
+
+| Input | Action |
+| --- | --- |
+| Left-click on water | Add smooth Gaussian water drop |
+| Right-drag | Orbit camera |
+| Middle-drag or Shift + Right-drag | Pan camera |
+| Mouse wheel | Zoom camera |
+| `1` / `2` / `3` / `4` | Camera presets (Top-down, Classic oblique, Low corner wall-caustics view, Grazing side view) |
+| `L` + Left-drag | Move light position across hemisphere |
+| `Space` | Pause / resume simulation |
+| `R` | Reset water surface |
+| `B` | Cycle boundary mode (`NEUMANN` / `ROBIN` / `ABSORB` / `DIRICHLET`) |
+| `H` | Toggle HUD overlay |
+| `Esc` | Quit |
+
+The top-left HUD provides live sliders for `AMP`, `SCALE`, `TEMPO`, `REFLECT`, `LIGHT EL`, `LIGHT AZ`, and `DISP`, plus a clickable Boundary Mode toggle.
+
+## CLI Flags
+
+```text
+caustics [options]
+  --dump <path.bmp> [frames]        Capture 24-bit BMP after N frames (default 180) and exit
+  --wind <amp> <wavelength> <tempo> Set initial wind parameters
+  --drop <gx> <gy> <amp> <frame>    Inject a drop at grid cell (gx, gy) on the given frame
+  --camera <ex> <ey> <ez> <tx> <ty> <tz>  Set camera eye and target positions
+  --preset <1|2|3|4>                Select camera preset
+  --light <x> <y> <z>               Set light position
+  --boundary <reflective|robin|absorb|dirichlet>  Select wave boundary condition
+  --dispersion <val>                Set chromatic dispersion strength
+  --no-ui                           Hide HUD overlay
+```
 
 ## Build
 
-You need OpenGL 3.3, CMake 3.15, and MinGW-w64 g++ with C++17. This tree builds on Windows. Put `gcc` and `g++` on `PATH`.
+Requirements: C++17 compiler, CMake 3.15+, OpenGL 3.3+, GLM, and GLFW 3.4+.
 
-GLM is a submodule at `external/glm`. The recorded commit is `2d4c4b4dd31fde06cfffad7915c2b3006402322f` from [g-truc/glm](https://github.com/g-truc/glm). A clone leaves that folder empty until you initialize it.
+Initialize the GLM submodule first:
 
-```
+```bash
 git submodule update --init external/glm
 ```
 
-GLFW headers are in `external/glfw-3.4.bin.WIN64`. The MinGW libraries are not in git. `.gitignore` ignores `**/lib-*/`, `*.a`, and `*.dll`. Download the [GLFW 3.4 64-bit Windows binaries](https://github.com/glfw/glfw/releases/download/3.4/glfw-3.4.bin.WIN64.zip). Copy `lib-mingw-w64` from that zip into `external/glfw-3.4.bin.WIN64/`. CMake links `libglfw3.a` from that folder.
+### Windows (MinGW-w64)
 
-```
+Download the [GLFW 3.4 64-bit Windows binaries](https://github.com/glfw/glfw/releases/download/3.4/glfw-3.4.bin.WIN64.zip) and copy `lib-mingw-w64` into `external/glfw-3.4.bin.WIN64/lib-mingw-w64`. Then build with `gcc`/`g++` on `PATH`:
+
+```powershell
 cmake -G "MinGW Makefiles" -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -S . -B build
 cmake --build build
+.\build\caustics.exe
 ```
 
-Run `build/caustics.exe`.
+### Linux / macOS / vcpkg
 
-`verify/check.ps1` checks that the wave step stays finite and bounded. It links stub GLFW symbols and does not need `libglfw3.a`. `verify/ring_band.py` reads one dump. It prints the fraction of annulus pixels above the 90th percentile luminance that sit in the largest edge-connected piece. The annulus is world radius 94 to 120. From the repo root:
+`CMakeLists.txt` automatically falls back to `find_package(glfw3)` and system GLFW/GLM installations when the bundled Windows MinGW libraries are not present:
 
+```bash
+# Example (Ubuntu/Debian): sudo apt install libglfw3-dev libglm-dev
+# Example (macOS Homebrew): brew install glfw glm
+cmake -S . -B build
+cmake --build build
+./build/caustics
 ```
+
+## Verification Suite
+
+Run all C++ verification tests (wave stability & 2^20 4x4 sweeps, boundary hydrodynamics, and pool coordinates/optics):
+
+```powershell
 powershell -ExecutionPolicy Bypass -File verify/check.ps1
 ```
+
+Visual regression checks on captured 24-bit BMP dumps:
+
+```powershell
+# Floor caustic ring-band connectivity (classic oblique or top-down view)
+.\build\caustics.exe --preset 2 --no-ui --dump .audit/classic.bmp 180
+python verify/ring_band.py .audit/classic.bmp
+
+.\build\caustics.exe --preset 1 --no-ui --dump .audit/topdown.bmp 180
+python verify/ring_band.py --preset topdown .audit/topdown.bmp
+
+# Submerged wall caustics, dry wall cleanliness, and water-wall seam check
+.\build\caustics.exe --preset 3 --light 120 -120 140 --no-ui --dump .audit/walls.bmp 180
+python verify/wall_caustics_check.py --preset 3 .audit/walls.bmp
+```
+
+See [.audit/caustic-contract.md](.audit/caustic-contract.md) for the full architectural and optical contract.
