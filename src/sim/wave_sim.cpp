@@ -462,7 +462,15 @@ void WaveSim::addDisturbance(int x, int y, float amplitude, float radius) {
             // C1-smooth raised-cosine splash profile (1 at center, 0 at radius, zero slope at both ends).
             const float d = std::sqrt(d2);
             const float weight = 0.5f * (1.0f + std::cos(kPi * d * invRadius));
-            const float delta = amplitude * weight;
+            float delta = amplitude * weight;
+            if (mirrorWalls) {
+                // Edge (weight 0.5) and corner (weight 0.25) cells sit on mirror planes and have no
+                // separate reflected twin under mirrorIndex; dividing by their trapezoidal weight
+                // reproduces the exact method-of-images superposition (dH/dn = 0 and exact volume).
+                const float wx = (width > 1 && (gx == 0 || gx == width - 1)) ? 0.5f : 1.0f;
+                const float wy = (height > 1 && (gy == 0 || gy == height - 1)) ? 0.5f : 1.0f;
+                delta /= (wx * wy);
+            }
             const int i = idx(gx, gy);
             height_current[i] += delta;
             height_prev[i] += delta;
